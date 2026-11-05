@@ -55,6 +55,9 @@ pub trait VpnServiceHandle: Send + Sync {
     fn keystore_get(&self, key: &str) -> anyhow::Result<Option<String>>;
     fn keystore_set(&self, key: &str, value: &str) -> anyhow::Result<()>;
     fn keystore_delete(&self, key: &str) -> anyhow::Result<()>;
+
+    /// Opens `url` in the user's browser (identity-provider / SSO login).
+    fn open_url(&self, url: &str) -> anyhow::Result<()>;
 }
 
 static HANDLE: OnceLock<Mutex<Option<Box<dyn VpnServiceHandle>>>> = OnceLock::new();
@@ -105,4 +108,8 @@ pub fn keystore_set(key: &str, value: &str) -> anyhow::Result<()> {
 
 pub fn keystore_delete(key: &str) -> anyhow::Result<()> {
     with_handle(|h| h.keystore_delete(key))
+}
+
+pub fn open_url(url: &str) -> anyhow::Result<()> {
+    with_handle(|h| h.open_url(url))
 }

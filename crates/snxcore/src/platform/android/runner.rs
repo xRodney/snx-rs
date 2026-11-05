@@ -1,6 +1,7 @@
 //! Drives a connection on Android, mirroring the desktop standalone flow in apps/snx-rs but without
-//! any interactive prompts: the password and any MFA code come from [`TunnelParams`]. Interactive or
-//! browser-based factors are rejected for now (password / certificate auth only).
+//! any interactive prompts: the password and any MFA code come from [`TunnelParams`], and
+//! identity-provider (SSO) login opens the browser through the VpnService. Other interactive factors
+//! are rejected for now.
 
 use std::sync::Arc;
 
@@ -11,6 +12,7 @@ use tracing::{debug, warn};
 
 use crate::{
     model::{MfaType, SessionState, params::TunnelParams},
+    otp::OtpListener,
     platform::{NetworkInterface, Platform, PlatformAccess},
     tunnel::{TunnelCommand, TunnelConnectorFactory, TunnelEvent, connector::CheckPointConnectorFactory},
 };
@@ -48,6 +50,14 @@ pub async fn run_tunnel(
                 };
                 session = connector.challenge_code(session, &input).await?;
             }
+            MfaType::IdentityProvider => {
+                // Same flow as the desktop: the gateway's SSO page hands the OTP to a listener on
+                // 127.0.0.1:7779, which the phone's browser reaches since it shares the loopback.
+                let listener = OtpListener::new().await?;
+                super::jni_bridge::open_url(&challenge.prompt)?;
+                let otp = listener.acquire_otp().await?;
+                session = connector.challenge_code(session, &otp).await?;
+            }
             other => bail!("Unsupported authentication factor on Android: {other:?}"),
         }
     }
@@ -81,4 +91,42 @@ pub async fn run_tunnel(
     tunnel.run(command_receiver, event_sender).await?;
     debug!("Android tunnel stopped");
     Ok(())
+}
+
+/// A login type offered by the gateway, as `snx-rs -m info` lists it.
+pub struct LoginTypeInfo {
+    pub id: String,
+    pub display_name: String,
+    pub factors: String,
+}
+
+/// Queries the gateway for the login types it offers (HTTPS only, no tunnel).
+pub async fn login_types(params: Arc<TunnelParams>) -> anyhow::Result<Vec<LoginTypeInfo>> {
+    let info = CheckPointConnectorFactory::default()
+        .new_gateway_connector(params)
+        .get_gateway_information()
+        .await?;
+
+    let mut options = info
+        .login_options_data
+        .map(|data| data.login_options_list)
+        .unwrap_or_default();
+    if options.is_empty() {
+        options.insert(String::new(), crate::model::proto::LoginOption::unspecified());
+    }
+
+    Ok(options
+        .into_values()
+        .filter(|opt| opt.show_realm != 0)
+        .map(|opt| LoginTypeInfo {
+            factors: opt
+                .factors
+                .into_values()
+                .map(|f| f.factor_type)
+                .collect::<Vec<_>>()
+                .join(", "),
+            id: opt.id,
+            display_name: opt.display_name,
+        })
+        .collect())
 }

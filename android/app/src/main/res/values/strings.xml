@@ -2,10 +2,15 @@
 <resources>
     <string name="app_name">snx-rs</string>
     <string name="hint_server">VPN gateway (host or host:port)</string>
-    <string name="hint_login_type">Login type (e.g. vpn)</string>
+    <string name="label_load_login_types">Load login types from gateway</string>
     <string name="hint_username">Username</string>
-    <string name="hint_password">Password</string>
+    <string name="hint_password">Password (not needed for SSO login types)</string>
     <string name="label_ignore_cert">Ignore server certificate (testing only)</string>
     <string name="label_connect">Connect</string>
     <string name="label_disconnect">Disconnect</string>
+    <string name="status_enter_server">Enter the gateway first</string>
+    <string name="status_loading">Loading login types…</string>
+    <string name="status_loaded">%1$d login types loaded</string>
+    <string name="status_pick_login_type">Load and pick a login type first</string>
+    <string name="status_connecting">Connecting… (see notification)</string>
 </resources>

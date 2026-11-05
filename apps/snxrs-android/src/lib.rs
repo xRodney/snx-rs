@@ -21,7 +21,7 @@ mod android {
     use jni::{
         JNIEnv, JavaVM,
         objects::{GlobalRef, JObject, JString, JValue},
-        sys::jint,
+        sys::{jboolean, jint, jstring},
     };
     use secrecy::SecretString;
     use serde::{Deserialize, Serialize};
@@ -162,6 +162,18 @@ mod android {
             Ok(())
         }
 
+        fn open_url(&self, url: &str) -> anyhow::Result<()> {
+            let mut env = self.vm.attach_current_thread()?;
+            let jurl = env.new_string(url)?;
+            env.call_method(
+                &self.service,
+                "openUrl",
+                "(Ljava/lang/String;)V",
+                &[JValue::Object(&jurl)],
+            )?;
+            Ok(())
+        }
+
         fn keystore_delete(&self, key: &str) -> anyhow::Result<()> {
             let mut env = self.vm.attach_current_thread()?;
             let jkey = env.new_string(key)?;
@@ -219,6 +231,48 @@ mod android {
         *command_tx().lock().unwrap() = None;
         jni_bridge::clear_handle();
         result
+    }
+
+    #[derive(Serialize)]
+    struct LoginTypeJson {
+        id: String,
+        name: String,
+        factors: String,
+    }
+
+    fn login_types_json(env: &mut JNIEnv, server: JString, ignore_cert: bool) -> anyhow::Result<String> {
+        let mut params = TunnelParams::default();
+        params.server_name = env.get_string(&server)?.into();
+        params.ignore_server_cert = ignore_cert;
+        let types = runtime().block_on(snxcore::platform::android::login_types(std::sync::Arc::new(params)))?;
+        let out: Vec<LoginTypeJson> = types
+            .into_iter()
+            .map(|t| LoginTypeJson {
+                id: t.id,
+                name: t.display_name,
+                factors: t.factors,
+            })
+            .collect();
+        Ok(serde_json::to_string(&out)?)
+    }
+
+    /// Instance method `MainActivity.nativeLoginTypes(server: String, ignoreCert: Boolean): String`.
+    /// Returns a JSON array of `{id, name, factors}`, or `{"error": "..."}`. Blocks; call off the UI thread.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_net_pankratov_snxrs_MainActivity_nativeLoginTypes(
+        mut env: JNIEnv,
+        _activity: JObject,
+        server: JString,
+        ignore_cert: jboolean,
+    ) -> jstring {
+        init_logging();
+        let json = login_types_json(&mut env, server, ignore_cert != 0).unwrap_or_else(|e| {
+            error!("Fetching login types failed: {e:#}");
+            serde_json::json!({ "error": format!("{e:#}") }).to_string()
+        });
+        env.new_string(json)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
     }
 
     /// Instance method `private external fun nativeConnect(configJson: String): Int` — the second JNI

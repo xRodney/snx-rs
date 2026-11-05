@@ -37,7 +37,7 @@ pub mod staging;
 pub mod stats;
 pub mod tun_fd;
 
-pub use runner::run_tunnel;
+pub use runner::{LoginTypeInfo, login_types, run_tunnel};
 
 impl UdpSocketExt for UdpSocket {
     // Kernel ESP-in-UDP encapsulation is only for the native XFRM path; the userspace ESP codec

@@ -1324,4 +1324,100 @@ mod tests {
         assert_eq!(left_pad(&[1, 2], 2).unwrap(), Bytes::from_static(&[1, 2]));
         assert!(left_pad(&[1, 2, 3], 2).is_err());
     }
+
+    /// Cross-check against OpenSSL (dev-dependency): the RustCrypto port must agree with an
+    /// independent implementation, not just with itself.
+    mod openssl_interop {
+        use super::*;
+        use openssl::{
+            bn::BigNum,
+            dh::Dh,
+            hash::{MessageDigest, hash},
+            pkey::PKey,
+            sign::Signer,
+            symm::{Cipher, Crypter, Mode},
+        };
+
+        fn ossl_digest(d: DigestType) -> MessageDigest {
+            match d {
+                DigestType::Md5 => MessageDigest::md5(),
+                DigestType::Sha1 => MessageDigest::sha1(),
+                DigestType::Sha256 => MessageDigest::sha256(),
+                DigestType::Sha384 => MessageDigest::sha384(),
+                DigestType::Sha512 => MessageDigest::sha512(),
+            }
+        }
+
+        #[test]
+        fn modp_dh_agrees_with_openssl() {
+            for (group, prime) in [(GroupType::Oakley2, G2_P), (GroupType::Oakley14, G14_P)] {
+                let ours = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, group).unwrap();
+                let theirs = Dh::from_pqg(BigNum::from_slice(prime).unwrap(), None, BigNum::from_u32(2).unwrap())
+                    .unwrap()
+                    .generate_key()
+                    .unwrap();
+
+                let our_pub = ours.public_key().unwrap();
+                let their_pub = left_pad(&theirs.public_key().to_vec(), group.public_key_len()).unwrap();
+
+                let ours_shared = ours.shared_secret(&their_pub).unwrap();
+                let theirs_shared = left_pad(
+                    &theirs.compute_key(&BigNum::from_slice(&our_pub).unwrap()).unwrap(),
+                    group.shared_secret_len(),
+                )
+                .unwrap();
+
+                assert_eq!(ours_shared, theirs_shared, "{group:?}");
+            }
+        }
+
+        #[test]
+        fn hash_and_hmac_agree_with_openssl() {
+            let key = b"0123456789abcdef0123456789abcdef-long-key-exceeding-block-size-for-sha1-and-sha256-xx";
+            let data = b"identity protection payload";
+            for d in [
+                DigestType::Md5,
+                DigestType::Sha1,
+                DigestType::Sha256,
+                DigestType::Sha384,
+                DigestType::Sha512,
+            ] {
+                assert_eq!(
+                    hash_chunks(d, [data]),
+                    hash(ossl_digest(d), data).unwrap().to_vec(),
+                    "hash {d:?}"
+                );
+
+                let pkey = PKey::hmac(key).unwrap();
+                let mut signer = Signer::new(ossl_digest(d), &pkey).unwrap();
+                signer.update(data).unwrap();
+                assert_eq!(hmac_chunks(d, key, [data]), signer.sign_to_vec().unwrap(), "hmac {d:?}");
+            }
+        }
+
+        #[test]
+        fn cbc_agrees_with_openssl() {
+            let data: Vec<u8> = (0..64u8).collect();
+            for (ct, ossl, key_len, iv_len) in [
+                (CipherType::Aes128Cbc, Cipher::aes_128_cbc(), 16, 16),
+                (CipherType::Aes192Cbc, Cipher::aes_192_cbc(), 24, 16),
+                (CipherType::Aes256Cbc, Cipher::aes_256_cbc(), 32, 16),
+                (CipherType::DesEde3Cbc, Cipher::des_ede3_cbc(), 24, 8),
+            ] {
+                let key: Vec<u8> = (0..key_len as u8).map(|b| b.wrapping_mul(7)).collect();
+                let iv: Vec<u8> = (0..iv_len as u8).map(|b| b.wrapping_mul(13)).collect();
+
+                let mut crypter = Crypter::new(ossl, Mode::Encrypt, &key, Some(&iv)).unwrap();
+                crypter.pad(false);
+                let mut expected = vec![0u8; data.len() + 32];
+                let n = crypter.update(&data, &mut expected).unwrap();
+                let m = crypter.finalize(&mut expected[n..]).unwrap();
+                expected.truncate(n + m);
+
+                let ours = cbc_encrypt(ct, &key, &data, &iv).unwrap();
+                assert_eq!(ours, expected, "encrypt {ct:?}");
+                assert_eq!(cbc_decrypt(ct, &key, &ours, &iv).unwrap(), data, "decrypt {ct:?}");
+            }
+        }
+    }
 }

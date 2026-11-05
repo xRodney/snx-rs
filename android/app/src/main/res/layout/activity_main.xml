@@ -16,12 +16,23 @@
             android:hint="@string/hint_server"
             android:inputType="textUri" />
 
-        <EditText
+        <Button
+            android:id="@+id/load_login_types"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/label_load_login_types" />
+
+        <Spinner
             android:id="@+id/login_type"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="@string/hint_login_type"
-            android:inputType="text" />
+            android:minHeight="48dp" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingVertical="4dp" />
 
         <EditText
             android:id="@+id/username"
