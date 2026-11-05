@@ -76,7 +76,8 @@ Current limitations (see docs/android-port.md and docs/deopenssl-plan.md):
 - AES-GCM-8 is unsupported (rarely negotiated).
 - Only IKEv1 has been exercised on a device.
 
-## CI alternative
+## CI
 
-A GitHub Actions workflow on a runner with the Android toolchain can produce the APK as a downloadable
-artifact without a local NDK. Not included here; ask if you want it added.
+`.github/workflows/android.yml` builds the debug APK on every push and pull request (and on manual
+dispatch) and uploads it as the `snx-rs-android-debug` artifact. CI signs with a throwaway debug key, so
+`adb install -r` of a CI build over a locally built one fails with a signature mismatch — uninstall first.
