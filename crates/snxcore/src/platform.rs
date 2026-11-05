@@ -7,11 +7,11 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "android")]
+use android::AndroidPlatformAccess as PlatformAccessImpl;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use ipnet::Ipv4Net;
-#[cfg(target_os = "android")]
-use android::AndroidPlatformAccess as PlatformAccessImpl;
 #[cfg(target_os = "linux")]
 use linux::LinuxPlatformAccess as PlatformAccessImpl;
 #[cfg(target_os = "macos")]

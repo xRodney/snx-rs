@@ -9,7 +9,7 @@
 
 use std::os::fd::RawFd;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 
 use super::{
     jni_bridge::{self, TunBuilderConfig},
@@ -21,7 +21,9 @@ use crate::platform::RoutingConfig;
 pub(super) fn adopt_from_staged() -> anyhow::Result<tun::AsyncDevice> {
     let snap = staging::snapshot();
 
-    let device = snap.device.ok_or_else(|| anyhow!("TUN establish before configure_device was staged"))?;
+    let device = snap
+        .device
+        .ok_or_else(|| anyhow!("TUN establish before configure_device was staged"))?;
 
     let (routes, gateway) = match snap.routing {
         Some(RoutingConfig::Full { destination, .. }) => (Vec::new(), Some(destination)),
@@ -31,10 +33,7 @@ pub(super) fn adopt_from_staged() -> anyhow::Result<tun::AsyncDevice> {
     };
 
     let (dns_servers, search_domains) = match snap.resolver {
-        Some(r) => (
-            r.dns_servers,
-            r.search_domains.into_iter().map(|d| d.name).collect(),
-        ),
+        Some(r) => (r.dns_servers, r.search_domains.into_iter().map(|d| d.name).collect()),
         None => (Vec::new(), Vec::new()),
     };
 

@@ -7286,6 +7286,7 @@ dependencies = [
  "widestring",
  "windows",
  "winreg",
+ "x509-parser",
  "xfrmnetlink",
  "zbus 6.2.0",
 ]

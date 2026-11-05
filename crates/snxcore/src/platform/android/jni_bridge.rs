@@ -20,7 +20,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use ipnet::Ipv4Net;
 use uuid::Uuid;
 
