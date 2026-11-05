@@ -36,7 +36,7 @@ jobs:
           rustup update
           rustup default stable
           rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-          cargo install cargo-ndk --locked
+          command -v cargo-ndk > /dev/null || cargo install cargo-ndk --locked
       - name: Build APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
