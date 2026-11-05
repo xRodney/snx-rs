@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -108,7 +109,7 @@ class VpnClientService : VpnService() {
             val pfd = builder.establish() ?: return -1
             tunInterface = pfd
             ConnectionState.update(getString(R.string.state_connected))
-            updateNotification(getString(R.string.state_connected))
+            updateNotification(getString(R.string.state_connected), connected = true)
             pfd.detachFd()
         } catch (e: Exception) {
             Log.e(TAG, "establishTun failed", e)
@@ -144,7 +145,7 @@ class VpnClientService : VpnService() {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
-    private fun buildNotification(text: String): Notification {
+    private fun buildNotification(text: String, connected: Boolean = false): Notification {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             mgr.createNotificationChannel(
@@ -155,18 +156,29 @@ class VpnClientService : VpnService() {
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,
         )
+        val disconnect = PendingIntent.getService(
+            this, 1, Intent(this, VpnClientService::class.java).setAction(ACTION_DISCONNECT),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(if (connected) R.drawable.ic_stat_connected else R.drawable.ic_stat_acquiring)
             .setContentIntent(pi)
             .setOngoing(true)
+            .addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    getString(R.string.label_disconnect),
+                    disconnect,
+                ).build(),
+            )
             .build()
     }
 
-    private fun updateNotification(text: String) {
+    private fun updateNotification(text: String, connected: Boolean = false) {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        mgr.notify(NOTIFICATION_ID, buildNotification(text))
+        mgr.notify(NOTIFICATION_ID, buildNotification(text, connected))
     }
 
     private fun cleanup() {
