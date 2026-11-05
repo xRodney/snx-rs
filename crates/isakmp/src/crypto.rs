@@ -7,37 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::ikev1::model::{IkeEncryptionAlgorithm, TransformId};
 
-// TEMPORARY OpenSSL compatibility shims. The IKE crypto in this module is RustCrypto-based, but
-// `esp.rs` and `certs.rs` still convert these enums into OpenSSL types. These two impls are the last
-// OpenSSL surface in crypto.rs and are removed once those files are ported. See docs/deopenssl-plan.md.
-impl From<DigestType> for openssl::hash::MessageDigest {
-    fn from(value: DigestType) -> Self {
-        use openssl::hash::MessageDigest;
-        match value {
-            DigestType::Md5 => MessageDigest::md5(),
-            DigestType::Sha1 => MessageDigest::sha1(),
-            DigestType::Sha256 => MessageDigest::sha256(),
-            DigestType::Sha384 => MessageDigest::sha384(),
-            DigestType::Sha512 => MessageDigest::sha512(),
-        }
-    }
-}
-
-impl From<CipherType> for openssl::symm::Cipher {
-    fn from(value: CipherType) -> Self {
-        use openssl::symm::Cipher;
-        match value {
-            CipherType::Aes128Cbc => Cipher::aes_128_cbc(),
-            CipherType::Aes192Cbc => Cipher::aes_192_cbc(),
-            CipherType::Aes256Cbc => Cipher::aes_256_cbc(),
-            CipherType::DesEde3Cbc => Cipher::des_ede3_cbc(),
-            CipherType::Aes128Gcm(_) => Cipher::aes_128_gcm(),
-            CipherType::Aes192Gcm(_) => Cipher::aes_192_gcm(),
-            CipherType::Aes256Gcm(_) => Cipher::aes_256_gcm(),
-        }
-    }
-}
-
 /// Expand a GCM operation over the (key size, tag size) matrix. `$run` is a
 /// local macro, defined at the call site over the function's key/nonce/data/aad,
 /// taking an AES block type and a tag-size type and yielding a `Vec<u8>`.
@@ -229,6 +198,13 @@ where
         DigestType::Sha384 => run!(sha2::Sha384),
         DigestType::Sha512 => run!(sha2::Sha512),
     }
+}
+
+/// Constant-time equality, replacing `openssl::memcmp::eq`. Differing lengths are public, so the
+/// short-circuit on length is not a leak.
+pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    a.len() == b.len() && a.ct_eq(b).into()
 }
 
 /// Length of the AES-GCM authentication tag, which IKEv2 negotiates as three
@@ -858,7 +834,7 @@ fn rsa_public_from_cert(cert: &[u8]) -> anyhow::Result<RsaPublicKey> {
 }
 
 /// AES/3DES-CBC with no padding (IKE/ESP pad the plaintext themselves).
-fn cbc_encrypt(cipher: CipherType, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn cbc_encrypt(cipher: CipherType, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Vec<u8>> {
     use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::NoPadding};
 
     macro_rules! run {
@@ -878,7 +854,7 @@ fn cbc_encrypt(cipher: CipherType, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow
     }
 }
 
-fn cbc_decrypt(cipher: CipherType, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn cbc_decrypt(cipher: CipherType, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Vec<u8>> {
     use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
 
     macro_rules! run {
@@ -901,7 +877,13 @@ fn cbc_decrypt(cipher: CipherType, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow
 
 /// AES-GCM AEAD. Returns `ciphertext || tag`, the tag truncated to the
 /// negotiated ICV length (ENCR_AES_GCM_8/12/16) via the tag-size type parameter.
-fn gcm_encrypt(cipher: CipherType, key: &[u8], data: &[u8], nonce: &[u8], aad: &[u8]) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn gcm_encrypt(
+    cipher: CipherType,
+    key: &[u8],
+    data: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+) -> anyhow::Result<Vec<u8>> {
     use aes_gcm::{
         AesGcm, KeyInit,
         aead::{Aead, Payload},
@@ -918,7 +900,13 @@ fn gcm_encrypt(cipher: CipherType, key: &[u8], data: &[u8], nonce: &[u8], aad: &
     Ok(gcm_match!(cipher, run))
 }
 
-fn gcm_decrypt(cipher: CipherType, key: &[u8], data: &[u8], nonce: &[u8], aad: &[u8]) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn gcm_decrypt(
+    cipher: CipherType,
+    key: &[u8],
+    data: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+) -> anyhow::Result<Vec<u8>> {
     use aes_gcm::{
         AesGcm, KeyInit,
         aead::{Aead, Payload},

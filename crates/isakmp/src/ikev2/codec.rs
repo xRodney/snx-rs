@@ -277,7 +277,7 @@ impl Ikev2Codec {
             let checksum_at = sk_end - icv_len;
             let expected = crypt.crypto.integrity(&crypt.inbound.sk_a, [&data[..checksum_at]])?;
 
-            if !openssl::memcmp::eq(&expected, &data[checksum_at..sk_end]) {
+            if !crate::crypto::ct_eq(&expected, &data[checksum_at..sk_end]) {
                 anyhow::bail!("SK payload integrity check failed");
             }
 
