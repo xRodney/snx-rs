@@ -17,6 +17,8 @@
 * [Contributing](contributing.md)
 * [Translations](translations.md)
 * [Building from Sources](building.md)
+* [Building the Android APK](android-build.md)
+* [Android Port Design Notes](android-port.md)
 * [Docker Usage](docker.md)
 * [Acknowledgements](acknowledgements.md)
 * [License](license.md)

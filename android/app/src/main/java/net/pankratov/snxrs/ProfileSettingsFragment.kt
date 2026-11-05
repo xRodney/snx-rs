@@ -71,7 +71,7 @@ class ProfileSettingsFragment : PreferenceFragmentCompat() {
                     it.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 }
                 summaryProvider = Preference.SummaryProvider<EditTextPreference> { p ->
-                    if (p.text.isNullOrEmpty()) getString(R.string.not_set) else "••••••••"
+                    if (p.text.isNullOrEmpty()) getString(R.string.value_not_set) else "••••••••"
                 }
             }
         }
@@ -105,7 +105,7 @@ class ProfileSettingsFragment : PreferenceFragmentCompat() {
                 } else {
                     store.putString(LOGIN_TYPES_CACHE, json)
                     applyLoginTypes(json)
-                    toast(getString(R.string.status_loaded, JSONArray(json).length()))
+                    JSONArray(json).length().let { toast(resources.getQuantityString(R.plurals.status_loaded, it, it)) }
                 }
             }
         }.start()
@@ -188,7 +188,7 @@ class ProfileSettingsFragment : PreferenceFragmentCompat() {
 
     private fun updateFileSummary(pref: Preference) {
         val path = store.getString(pref.key, null)
-        pref.summary = if (path.isNullOrBlank()) getString(R.string.not_set) else File(path).name.removePrefix("${pref.key}-")
+        pref.summary = if (path.isNullOrBlank()) getString(R.string.value_not_set) else File(path).name.removePrefix("${pref.key}-")
     }
 
     private fun toast(text: String) = Toast.makeText(requireContext(), text, Toast.LENGTH_SHORT).show()

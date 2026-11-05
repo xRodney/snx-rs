@@ -158,6 +158,9 @@ error-certificate-verify-failed = TLS-certifikatvalidering mislykkedes. Serveren
 error-invalid-gateway-info = Ugyldigt gateway-informationssvar
 error-invalid-notification-level = Ugyldigt notifikationsniveau
 error-unsupported-login-type = Logintypen understøttes ikke
+error-connection-in-progress = En forbindelse er allerede i gang; afbryd først
+error-interactive-mfa-unsupported = Interaktive MFA-forespørgsler understøttes endnu ikke: {$prompt}
+error-unsupported-auth-factor = Ikke-understøttet godkendelsesfaktor: {$factor}
 
 # Placeholder texts
 placeholder-domains = Domæner adskilt med komma

@@ -1,6 +1,7 @@
 # Building the Android APK
 
-This builds `libsnxrs.so` (the Rust core) with cargo-ndk and packages it into an APK with Gradle.
+This builds `libsnxrs.so` (the Rust core) with cargo-ndk and packages it into an APK with Gradle. The app
+runs on Android 8.0 (API 26) and later.
 
 > Status: builds end to end (NDK r28c `28.2.13676358`, Android Studio's JBR 21, Gradle 8.9 wrapper)
 > and connects on a Galaxy S23 (Android 16) to a Check Point gateway over IKEv1 + ESP/UDP with Azure
@@ -84,6 +85,6 @@ Current limitations (see docs/android-port.md):
 
 ## CI
 
-`.github/workflows/android.yml` builds the debug APK on every push and pull request (and on manual
+`.github/workflows/android.yml` runs clippy for the Android target and Android lint, and builds the debug APK on every push and pull request (and on manual
 dispatch) and uploads it as the `snx-rs-android-debug` artifact. CI signs with a throwaway debug key, so
 `adb install -r` of a CI build over a locally built one fails with a signature mismatch — uninstall first.

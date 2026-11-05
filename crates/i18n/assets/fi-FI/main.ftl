@@ -158,6 +158,9 @@ error-certificate-verify-failed = TLS-varmenteen vahvistus epäonnistui. Palveli
 error-invalid-gateway-info = Virheellinen yhdyskäytävän tietovastaus
 error-invalid-notification-level = Virheellinen ilmoitustaso
 error-unsupported-login-type = Kirjautumistyyppiä ei tueta
+error-connection-in-progress = Yhteys on jo muodostumassa; katkaise se ensin
+error-interactive-mfa-unsupported = Interaktiivisia MFA-kehotteita ei vielä tueta: {$prompt}
+error-unsupported-auth-factor = Tukematon todennustekijä: {$factor}
 
 # Placeholder texts
 placeholder-domains = Pilkulla erotetut verkkotunnukset

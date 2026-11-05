@@ -1,10 +1,3 @@
-//! Native (kernel XFRM) IPsec is unavailable on Android — it needs CAP_NET_ADMIN and netlink.
-//!
-//! This is the same situation as macOS: `get_features().ipsec_native == false` forces the connector
-//! to pick the **userspace** ESP data path (`tunnel/ipsec/imp/tun.rs`, `isakmp::esp::EspCodec` over a
-//! normal UDP/TCP socket), which works fine for an unprivileged app. So this configurator is never
-//! actually invoked; it exists to satisfy `PlatformAccess::new_ipsec_configurator`.
-
 use std::net::Ipv4Addr;
 
 use async_trait::async_trait;
@@ -46,11 +39,11 @@ impl AndroidIPsecStub {
 #[async_trait]
 impl IPsecConfigurator for AndroidIPsecStub {
     async fn configure(&self) -> anyhow::Result<()> {
-        anyhow::bail!("Native IPsec is not available on Android; the userspace ESP path is used instead")
+        anyhow::bail!("Not implemented")
     }
 
     async fn rekey(&mut self, _session: &IPsecSession) -> anyhow::Result<()> {
-        anyhow::bail!("Native IPsec is not available on Android")
+        anyhow::bail!("Not implemented")
     }
 
     async fn cleanup(&self) {}

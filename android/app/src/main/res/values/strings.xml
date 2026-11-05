@@ -11,7 +11,6 @@
     <string name="label_load_login_types">Load login types from gateway</string>
 
     <string name="profile_unnamed">Unnamed</string>
-    <string name="profile_default_name">Default</string>
     <string name="profile_new_title">New profile</string>
     <string name="profile_name_hint">Profile name</string>
     <string name="profile_delete_confirm">Delete profile \"%1$s\"?</string>
@@ -20,7 +19,10 @@
 
     <string name="status_enter_server">Enter the gateway first</string>
     <string name="status_loading">Loading login types…</string>
-    <string name="status_loaded">%1$d login types loaded</string>
+    <plurals name="status_loaded">
+        <item quantity="one">%1$d login type loaded</item>
+        <item quantity="other">%1$d login types loaded</item>
+    </plurals>
 
     <string name="state_connecting">Connecting…</string>
     <string name="state_signin">Waiting for sign-in…</string>
@@ -29,7 +31,7 @@
     <string name="state_disconnected">Disconnected</string>
     <string name="state_failed">Disconnected: %1$s</string>
 
-    <string name="not_set">Not set</string>
+    <string name="value_not_set">Not set</string>
     <string name="file_choose">Choose another file</string>
     <string name="file_remove">Remove</string>
 

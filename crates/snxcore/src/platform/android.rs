@@ -1,13 +1,8 @@
-#![allow(unsafe_code)] // SO_NO_CHECK via libc; JNI lives in jni_bridge
+#![allow(unsafe_code)]
 
-//! Android platform implementation.
-//!
-//! Structured like `macos.rs`: native (kernel XFRM) IPsec is stubbed, so `ipsec_native = false`
-//! forces the userspace ESP data path, which an unprivileged app can run. The defining difference
-//! from every desktop platform is that the TUN interface is owned by Android's `VpnService`:
-//! addresses, routes, DNS and MTU are declared on `VpnService.Builder` *before* `establish()` yields
-//! a file descriptor. The configurators here therefore *stage* their inputs (see [`staging`]) and the
-//! device is adopted from the VpnService fd in [`tun_fd`].
+//! The TUN interface belongs to Android's `VpnService`: address, routes, DNS and MTU must be given to
+//! `VpnService.Builder` before `establish()` returns the fd. The configurators therefore only stage
+//! their input ([`staging`]) and the device is adopted from that fd later ([`tun_fd`]).
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -44,7 +39,6 @@ pub use runner::{LoginTypeInfo, login_types, network_changed, request_stop, run_
 
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-/// The app's `Context.getFilesDir()`; holds the IKE session store.
 pub fn set_data_dir(path: PathBuf) {
     let _ = DATA_DIR.set(path);
 }
@@ -53,14 +47,11 @@ pub fn set_data_dir(path: PathBuf) {
 const SO_NO_CHECK: libc::c_int = 11;
 
 impl UdpSocketExt for UdpSocket {
-    // Kernel ESP-in-UDP encapsulation is only for the native XFRM path; the userspace ESP codec
-    // handles encapsulation itself, so this is a no-op (same as macOS).
     fn set_encapsulation(&self, _encap: UdpEncapType) -> anyhow::Result<()> {
         Ok(())
     }
 
-    // The gateway echoes the request's UDP checksum in keepalive replies, so the request is sent with
-    // checksumming off (zero), as on Linux; otherwise the kernel drops the replies.
+    // The gateway echoes the request's checksum in keepalive replies; the kernel would drop them.
     fn set_no_check(&self, flag: bool) -> anyhow::Result<()> {
         use std::os::fd::AsRawFd;
         let value: libc::c_int = flag.into();
@@ -84,8 +75,7 @@ impl UdpSocketExt for UdpSocket {
     }
 
     fn bind_to_tunnel(&self, _device: &str) -> anyhow::Result<()> {
-        // On Android, socket/tunnel separation is done with VpnService.protect (see jni_bridge),
-        // not by binding to the tunnel interface. Nothing to do here.
+        // Sockets that must bypass the tunnel are VpnService.protect()ed instead.
         Ok(())
     }
 
@@ -121,7 +111,6 @@ impl PlatformAccess for AndroidPlatformAccess {
     }
 
     fn check_privileges(&self) -> anyhow::Result<()> {
-        // No root on Android; the VpnService consent flow grants the tunnel capability instead.
         Ok(())
     }
 
@@ -156,7 +145,6 @@ impl PlatformAccess for AndroidPlatformAccess {
     }
 
     fn trusted_library_path(&self, _path: &Path) -> Option<PathBuf> {
-        // No PKCS#11/HSM support path on Android.
         None
     }
 
@@ -165,8 +153,7 @@ impl PlatformAccess for AndroidPlatformAccess {
     }
 
     async fn authorize_socket_peer(&self, _stream: &interprocess::local_socket::tokio::Stream) -> bool {
-        // The command-socket IPC (daemon + snxctl/GUI) is not used on Android: the service runs the
-        // controller in-process. This is unreachable; deny by default.
+        // There is no command socket on Android: the tunnel runs inside the app's own service.
         false
     }
 }

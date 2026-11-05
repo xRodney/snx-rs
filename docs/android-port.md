@@ -1,12 +1,11 @@
-# Android port — skeleton and design notes (v6.x)
+# Android port: design notes
 
-Status: **skeleton.** The `crates/snxcore/src/platform/android/` module implements the full
-`PlatformAccess` trait surface and mirrors the macOS module structure. It is compiled out on every
-non-Android target; the host build is unaffected. The JNI handle, the cdylib wrapper, and the NDK
-build are stubbed (`unimplemented!()` / `TODO`). It has not been built against the Android target in
-this repo (no NDK here — see "Build").
+The app is a Kotlin `VpnService` (`android/`) around the Rust core, built as `libsnxrs.so` from
+`apps/snxrs-android`. The core's Android support is the `crates/snxcore/src/platform/android/`
+module, which implements the `PlatformAccess` trait like the other platforms; it is compiled out on
+every other target.
 
-## Why v6 is a good base
+## Why it fits the existing design
 
 - **Clean platform seam.** `platform.rs` selects one `PlatformAccess` impl per target. Adding Android
   = one new module, exactly as Windows and macOS were added. No shared logic forked.
@@ -47,47 +46,58 @@ imp/tun.rs::run
   pump: tun ↔ EspCodec ↔ protected UDP/TCP socket
 ```
 
-### Shared-code touchpoints (minimal, all `#[cfg]`-gated; desktop unchanged)
+### Changes to shared code
 
-1. `platform.rs` — select `AndroidPlatformAccess`; `pub mod android`; add `Clone` to `RoutingConfig`
-   (needed to stage it; the other config structs were already `Clone`).
-2. `tunnel/device.rs` — on Android `TunDevice` holds no eager device; `inner()` lazily adopts the
-   VpnService fd from the staged config on first call.
-3. `tunnel/ipsec/imp/tun.rs` — on Android, defer the `tun.inner()` capture until after
-   `setup_routing`/`setup_dns` have staged their config.
-4. `tunnel/ipsec/imp/udp.rs` — on Android, `protect_socket()` the NAT-T socket right after bind.
-   **Not optional**: an unprotected gateway socket routes back into the tunnel and deadlocks.
+1. `platform.rs`: selects `AndroidPlatformAccess`; `RoutingConfig` derives `Clone` so it can be staged.
+2. `tunnel/device.rs`: on Android, `TunDevice::inner()` adopts the VpnService fd on first use.
+3. `tunnel/ipsec/imp/tun.rs`: on Android, the device is taken after routing and DNS are staged.
+4. `tunnel/ipsec/imp/udp.rs`: on Android, the NAT-T socket is protected right after bind. Without it,
+   gateway traffic loops back into the tunnel.
+5. `tunnel/ssl.rs`: connects through `isakmp::transport::connect_tcp`, so the socket hook can protect
+   the SSL tunnel socket too (a plain connect on other platforms).
+6. `model/params.rs`: `TunnelParams::parse` parses config text; `load` reads the file and calls it.
+   The app keeps profiles in its own storage and hands their text to the native side.
+7. `tunnel/ipsec.rs`: the IKEv1/IKEv2 session table names are constants, and an Android-only
+   `SessionStore::delete_all` forgets both on disconnect.
 
 ## JNI interface
 
-| Direction | Symbol | Purpose |
-|-----------|--------|---------|
-| Java→Rust | `nativeConnect(service, configJson)` | parse profile, register handle, start controller |
-| Java→Rust | `nativeDisconnect()` | stop controller, clear handle + staging |
-| Rust→Java | `establishTun(addr, mtu, routes[], dns[], domains[]) → fd` | build interface, return fd |
-| Rust→Java | `protectSocket(fd) → bool` | `VpnService.protect()` |
-| Rust→Java | `androidId() → String` | stable id → UUIDv5 machine id |
-| Rust→Java | `keystoreGet/Set/Delete` | Android Keystore / EncryptedSharedPreferences |
+| Direction | Call | Purpose |
+|-----------|------|---------|
+| Kotlin→Rust | `VpnClientService.nativeConnect(config, filesDir)` | parse the profile, run until disconnect |
+| Kotlin→Rust | `VpnClientService.nativeDisconnect()` | user disconnect |
+| Kotlin→Rust | `VpnClientService.nativeSetOnline(online)` | feeds `NetworkInterface::is_online()` |
+| Kotlin→Rust | `VpnClientService.nativeNetworkChanged()` | restart the tunnel on the new network |
+| Kotlin→Rust | `Native.loginTypes(config)` | login types the gateway offers, as JSON |
+| Rust→Kotlin | `establishTun(json) → fd` | `VpnService.Builder` + `establish()`, detached fd |
+| Rust→Kotlin | `protectSocket(fd) → bool` | `VpnService.protect()` |
+| Rust→Kotlin | `openUrl(url)` | SSO sign-in page in `SsoActivity` |
+| Rust→Kotlin | `onReconnecting()` | status and notification |
+| Rust→Kotlin | `androidId()`, `keystoreGet/Set/Delete` | machine id, keychain |
 
-Rust side: `platform/android/jni_bridge.rs` (`VpnServiceHandle` trait + the `extern "system"`
-entry points behind `android-jni`). Kotlin side: `android/app/.../VpnClientService.kt`.
+The Rust side of the callbacks is the `VpnServiceHandle` trait in `platform/android/jni_bridge.rs`,
+implemented with the `jni` crate in `apps/snxrs-android`, so `snxcore` itself does not depend on `jni`.
 
 ## Platform module map (`crates/snxcore/src/platform/android/`)
 
 | File | Implements | Notes |
 |------|------------|-------|
-| `android.rs` | `PlatformAccess`, `UdpSocketExt` | `ipsec_native=false`; mirrors `macos.rs` |
-| `net.rs` | `NetworkInterface` | stages device; `get_default_ipv4` → UNSPECIFIED |
-| `routing.rs` | `RoutingConfigurator` | stages routes; `Cleanup` is a no-op |
+| `android.rs` | `PlatformAccess`, `UdpSocketExt` | `ipsec_native=false`; `SO_NO_CHECK` via libc |
+| `runner.rs` | — | login, tunnel and reconnect loop |
+| `net.rs` | `NetworkInterface` | stages the device; online flag |
+| `routing.rs` | `RoutingConfigurator` | stages routes |
 | `resolver.rs` | `ResolverConfigurator` | stages DNS |
-| `keychain.rs` | `Keychain` | Keystore via bridge |
-| `stats.rs` | `StatsPoller` | reads `/sys/class/net/<if>/statistics` |
+| `tun_fd.rs` | — | adopts the VpnService fd |
+| `staging.rs` | — | staged config for `tun_fd` |
+| `jni_bridge.rs` | — | `VpnServiceHandle` trait |
+| `keychain.rs` | `Keychain` | EncryptedSharedPreferences via the bridge |
+| `stats.rs` | `StatsPoller` | `/sys/class/net/<if>/statistics` |
 | `machine_uuid.rs` | — | `ANDROID_ID` → UUIDv5 |
-| `single_instance.rs` | `SingleInstance` | always single (app sandbox) |
-| `ipsec_stub.rs` | `IPsecConfigurator` | unused (userspace path) |
-| `tun_fd.rs` | — | adopt VpnService fd |
-| `staging.rs` | — | process-global staged config |
-| `jni_bridge.rs` | — | JNI boundary |
+| `single_instance.rs` | `SingleInstance` | always single |
+| `ipsec_stub.rs` | `IPsecConfigurator` | unused, as on macOS |
+
+`android.rs` uses `unsafe` for one `setsockopt` call (the `libc` crate does not export `SO_NO_CHECK`
+for Android), and `apps/snxrs-android` for the `#[unsafe(no_mangle)]` JNI exports.
 
 ## Build
 
@@ -102,12 +112,6 @@ client and isakmp's crypto) is vendored for the Android target and compiles with
 `VpnService.protect()` the IKE channel. It is needed because the gateway's /32 is routed into the VPN
 for the keepalive. It should go upstream as a small PR, after which the vendored copy can be dropped.
 
-## Status
-
-Done: cdylib + JNI handle, runner (password and identity-provider/SSO login), VpnService with
-foreground notification and consent, protect() for ESP/TCPT/SSL sockets, keepalive through the tunnel,
-connection profiles with the desktop option set, CI build, network monitoring and automatic reconnect.
-
 ## Network changes
 
 `NetworkMonitor.kt` follows the non-VPN networks (the app's own default network is its VPN) and picks
@@ -121,7 +125,9 @@ backs off, and runs the login again, first trying `restore_session()` when `ike-
 failure before the first connection is reported as before. A user disconnect deletes the saved IKE
 sessions (`SessionStore::delete_all`).
 
-Open:
+## Open
+
+
 - Interactive MFA prompts (typed codes) and the Mobile Access portal.
 - Keep the VPN interface across reconnects (re-`establish()` instead of closing the fd) so traffic does
   not briefly bypass the tunnel and apps do not see the VPN go down.

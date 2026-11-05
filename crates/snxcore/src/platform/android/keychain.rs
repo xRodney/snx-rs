@@ -1,7 +1,3 @@
-//! `Keychain` for Android, backed by the Android Keystore / `EncryptedSharedPreferences` through the
-//! [`jni_bridge`](super::jni_bridge). Passwords are keyed by profile UUID, matching the other
-//! platforms.
-
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 

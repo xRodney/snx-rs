@@ -1,9 +1,4 @@
-//! JNI wrapper that exports `libsnxrs.so` for the Android app.
-//!
-//! On Android this provides the `nativeConnect`/`nativeDisconnect` entry points the Kotlin
-//! `VpnClientService` binds, a concrete [`VpnServiceHandle`](snxcore::platform::android::jni_bridge::VpnServiceHandle)
-//! that calls back into the service, and a tokio runtime that drives the tunnel. On any other target
-//! the crate is empty.
+//! `libsnxrs.so`: the JNI entry points of the Android app (`android/`). Empty on other targets.
 
 #![allow(unsafe_code)]
 
@@ -26,7 +21,6 @@ mod android {
     };
     use tracing::{error, info};
 
-    /// What `establishTun` receives as JSON on the Java side.
     #[derive(Serialize)]
     struct TunSpec {
         address: String,
@@ -163,7 +157,6 @@ mod android {
         }
     }
 
-    /// Profile text in the desktop config-file format, parsed by the same code as `snx-rs.conf`.
     fn parse_profile(env: &mut JNIEnv, config: &JString) -> anyhow::Result<TunnelParams> {
         let text: String = env.get_string(config)?.into();
         let mut params = TunnelParams::parse(text)?;
@@ -191,7 +184,6 @@ mod android {
         let service = env.new_global_ref(service)?;
         jni_bridge::set_handle(Box::new(AndroidVpnServiceHandle { vm, service }));
 
-        // Blocks this (dedicated Java) thread until the tunnel stops.
         let result = runtime().block_on(android::run_tunnel(params));
 
         jni_bridge::clear_handle();
@@ -219,8 +211,7 @@ mod android {
         Ok(serde_json::to_string(&out)?)
     }
 
-    /// `Native.loginTypes(config: String): String` (static) — profile text in config-file format.
-    /// Returns a JSON array of `{id, name, factors}`, or `{"error": "..."}`. Blocks; call off the UI thread.
+    /// Returns a JSON array of `{id, name, factors}`, or `{"error": "..."}`.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_Native_loginTypes(
         mut env: JNIEnv,
@@ -237,9 +228,7 @@ mod android {
             .unwrap_or(std::ptr::null_mut())
     }
 
-    /// Instance method `private external fun nativeConnect(config: String, filesDir: String): String` —
-    /// the second JNI argument is the `VpnClientService` receiver (`this`). Blocks across reconnects;
-    /// returns "" on a clean stop, else the error.
+    /// Blocks until the user disconnects or the connection fails; returns "" or the error.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeConnect(
         mut env: JNIEnv,
@@ -260,14 +249,12 @@ mod android {
             .unwrap_or(std::ptr::null_mut())
     }
 
-    /// Instance method `private external fun nativeDisconnect()`.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeDisconnect(_env: JNIEnv, _service: JObject) {
         info!("Disconnect requested");
         android::request_stop();
     }
 
-    /// Instance method `private external fun nativeSetOnline(online: Boolean)`.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeSetOnline(
         _env: JNIEnv,
@@ -277,7 +264,6 @@ mod android {
         android::set_online(online != 0);
     }
 
-    /// Instance method `private external fun nativeNetworkChanged()`.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeNetworkChanged(
         _env: JNIEnv,

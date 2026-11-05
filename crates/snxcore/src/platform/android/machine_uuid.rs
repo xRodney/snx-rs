@@ -1,5 +1,3 @@
-//! Stable machine id from `ANDROID_ID`, hashed into a UUIDv5 by the bridge.
-
 use uuid::Uuid;
 
 use super::jni_bridge;

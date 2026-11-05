@@ -112,7 +112,7 @@ fn is_online() -> bool {
 pub async fn run_tunnel(params: Arc<TunnelParams>) -> anyhow::Result<()> {
     let ctl = control();
     if ctl.running.swap(true, Ordering::SeqCst) {
-        bail!("A connection is already in progress; disconnect first");
+        bail!(i18n::tr!("error-connection-in-progress"));
     }
     ctl.stop.store(false, Ordering::SeqCst);
     isakmp::transport::set_socket_hook(Some(Arc::new(super::jni_bridge::protect_socket)));
@@ -177,7 +177,7 @@ async fn run_once(params: Arc<TunnelParams>, connected: Arc<AtomicBool>) -> anyh
 
     let (mut connector, session) = tokio::select! {
         result = login(&factory, params.clone()) => result?,
-        () = control().wait_until(|| false, None) => bail!("Connection cancelled"),
+        () = control().wait_until(|| false, None) => bail!(i18n::tr!("error-connection-cancelled")),
     };
 
     let (command_sender, command_receiver) = mpsc::channel(16);
@@ -254,33 +254,36 @@ async fn login(
                 } else if let Some(ref code) = params.mfa_code {
                     code.clone()
                 } else {
-                    bail!("Interactive MFA is not supported on Android yet: {}", challenge.prompt);
+                    bail!(i18n::tr!(
+                        "error-interactive-mfa-unsupported",
+                        prompt = challenge.prompt
+                    ));
                 };
                 session = connector.challenge_code(session, &input).await?;
             }
             MfaType::IdentityProvider => {
-                // Same flow as the desktop: the gateway's SSO page hands the OTP to a listener on
-                // 127.0.0.1:7779, which the in-app WebView reaches since it shares the loopback.
                 let listener = OtpListener::new().await?;
                 super::jni_bridge::open_url(&challenge.prompt)?;
                 let otp = listener.acquire_otp().await?;
                 session = connector.challenge_code(session, &otp).await?;
             }
-            other => bail!("Unsupported authentication factor on Android: {other:?}"),
+            other => bail!(i18n::tr!(
+                "error-unsupported-auth-factor",
+                factor = format!("{other:?}")
+            )),
         }
     }
 
     Ok((connector, session))
 }
 
-/// A login type offered by the gateway, as `snx-rs -m info` lists it.
 pub struct LoginTypeInfo {
     pub id: String,
     pub display_name: String,
     pub factors: String,
 }
 
-/// Queries the gateway for the login types it offers (HTTPS only, no tunnel).
+/// The login types the gateway offers, as `snx-rs -m info` lists them.
 pub async fn login_types(params: Arc<TunnelParams>) -> anyhow::Result<Vec<LoginTypeInfo>> {
     let info = CheckPointConnectorFactory::default()
         .new_gateway_connector(params)

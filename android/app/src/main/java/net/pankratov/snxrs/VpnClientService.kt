@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
 import android.net.VpnService
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import android.system.OsConstants
@@ -17,16 +16,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONObject
 
-/**
- * Android VpnService hosting the snx-rs Rust core (libsnxrs.so, from the apps/snxrs-android cdylib).
- *
- * Java -> Rust: [nativeConnect] / [nativeDisconnect] start/stop the tokio runtime + tunnel. The
- * controller runs the IPsec userspace ESP path (snxcore's ipsec_native = false), so no root is used.
- *
- * Rust -> Java (via the Rust VpnServiceHandle): [establishTun] builds the tunnel and returns its fd,
- * [protectSocket] keeps gateway sockets off the tunnel, [androidId]/[keystore*] back machine-id and
- * password storage.
- */
+/** Runs the Rust core (libsnxrs.so); the public methods below are called from Rust over JNI. */
 class VpnClientService : VpnService() {
 
     companion object {
@@ -47,11 +37,7 @@ class VpnClientService : VpnService() {
     private var worker: Thread? = null
     private var networkMonitor: NetworkMonitor? = null
 
-    // Implemented in apps/snxrs-android (Java_net_pankratov_snxrs_VpnClientService_*).
-    /**
-     * Profile in snx-rs config-file format. Blocks across automatic reconnects; returns "" on a
-     * clean stop, else the error.
-     */
+    /** Blocks until the user disconnects or the connection fails; returns "" or the error. */
     private external fun nativeConnect(config: String, filesDir: String): String
     private external fun nativeDisconnect()
     private external fun nativeSetOnline(online: Boolean)
@@ -86,10 +72,7 @@ class VpnClientService : VpnService() {
         return START_STICKY
     }
 
-    /**
-     * Called from Rust. `configJson` = {address, prefix, mtu, routes[], dns_servers[], search_domains[]}.
-     * Builds the tunnel and returns the raw fd (ownership transferred via detachFd), or -1 on failure.
-     */
+    /** `configJson`: {address, prefix, mtu, routes[], dns_servers[], search_domains[]}. Returns a detached fd or -1. */
     fun establishTun(configJson: String): Int {
         return try {
             val cfg = JSONObject(configJson)
@@ -126,7 +109,6 @@ class VpnClientService : VpnService() {
 
     fun protectSocket(fd: Int): Boolean = protect(fd)
 
-    /** Called from Rust when the tunnel dropped after having been up and is being re-established. */
     fun onReconnecting() {
         ConnectionState.update(getString(R.string.state_reconnecting))
         updateNotification(getString(R.string.state_reconnecting))
@@ -142,7 +124,6 @@ class VpnClientService : VpnService() {
         }.also { it.start() }
     }
 
-    /** Called from Rust for identity-provider (SSO) login: show the gateway's sign-in page in [SsoActivity]. */
     fun openUrl(url: String) {
         ConnectionState.update(getString(R.string.state_signin))
         updateNotification(getString(R.string.state_signin))
@@ -170,11 +151,9 @@ class VpnClientService : VpnService() {
 
     private fun buildNotification(text: String, connected: Boolean = false): Notification {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "VPN", NotificationManager.IMPORTANCE_LOW),
-            )
-        }
+        mgr.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "VPN", NotificationManager.IMPORTANCE_LOW),
+        )
         val pi = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,

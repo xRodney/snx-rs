@@ -158,6 +158,9 @@ error-certificate-verify-failed = Overenie TLS certifikátu zlyhalo. Certifikát
 error-invalid-gateway-info = Neplatná odpoveď s informáciami o bráne
 error-invalid-notification-level = Neplatná úroveň oznámení
 error-unsupported-login-type = Nepodporovaný typ prihlásenia
+error-connection-in-progress = Pripojenie už prebieha; najprv sa odpojte
+error-interactive-mfa-unsupported = Interaktívne výzvy MFA zatiaľ nie sú podporované: {$prompt}
+error-unsupported-auth-factor = Nepodporovaný overovací faktor: {$factor}
 
 # Placeholder texts
 placeholder-domains = Domény oddelené čiarkami

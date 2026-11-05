@@ -1,10 +1,3 @@
-//! `RoutingConfigurator` for Android.
-//!
-//! Routes are declared on `VpnService.Builder.addRoute` before `establish()`, so there is nothing to
-//! apply here. `configure` stages the `RoutingConfig`; `tun_fd` turns it into the Builder's routes
-//! (empty routes => `0.0.0.0/0` full tunnel). A `Cleanup` config is a no-op — stopping the service
-//! drops all routing.
-
 use async_trait::async_trait;
 
 use super::staging;

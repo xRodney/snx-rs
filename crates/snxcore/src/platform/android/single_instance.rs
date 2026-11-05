@@ -1,6 +1,3 @@
-//! Single-instance guard. Inside one Android app sandbox only one `VpnService` runs at a time, so
-//! this is always the single instance; the service lifecycle enforces it.
-
 use crate::platform::SingleInstance;
 
 pub struct AndroidSingleInstance;

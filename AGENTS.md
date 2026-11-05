@@ -10,7 +10,7 @@ Repository: https://github.com/ancwrd1/snx-rs
 License: AGPL-3.0 (see `COPYING`)  
 Author: Dmitry Pankratov <dmitry@pankratov.net>  
 
-Currently supported platforms: Linux, Windows, macOS. All platform-specific code must be isolated under `platform` submodule.
+Currently supported platforms: Linux, Windows, macOS, Android. All platform-specific code must be isolated under `platform` submodule.
 
 ## Workspace layout
 
@@ -23,14 +23,17 @@ This is a Cargo workspace (`resolver = "2"`, `edition = "2024"`) declared in the
 | `snx-rs`     | `apps/snx-rs`     | binary  | The service / daemon. Runs in standalone or command mode; needs root for tunnel setup.     |
 | `snxctl`     | `apps/snxctl`     | binary  | Thin CLI that talks to `snx-rs` in command mode (connect/disconnect/status/info).          |
 | `snx-rs-gui` | `apps/snx-rs-gui` | binary  | Slint-based GUI with tray icon. Linux uses KSNI; macOS/Windows use the `tray-icon` crate. Talks to `snx-rs` over IPC. |
+| `snxrs-android` | `apps/snxrs-android` | cdylib | `libsnxrs.so`: JNI entry points for the Android app. Empty on other targets. |
+| `isakmp`     | `crates/isakmp`   | library | Vendored upstream `isakmp` with the `SNX-RS ANDROID PATCH` socket hook (see `docs/android-port.md`). |
 
 Top-level directories:
 
 * `crates/` — library crates.
-* `apps/` — the three binary crates.
+* `apps/` — the three binary crates and the Android cdylib.
+* `android/` — the Android app (Kotlin, Gradle). Gradle runs cargo-ndk to build `libsnxrs.so`; see `docs/android-build.md`.
 * `docs/` — user-facing Markdown docs (`docs/README.md` is the index). Keep in sync when changing user-visible behavior.
 * `package/` — packaging assets: systemd unit (`snx-rs.service`), desktop file, Debian and RPM packaging, installer script, LTO build script.
-* `.github/workflows/` — `ci.yml` (fmt + clippy + test), `release.yml`, `automerge.yml`, `pages.yml`.
+* `.github/workflows/` — `ci.yml` (fmt + clippy + test), `android.yml` (Android clippy + debug APK), `release.yml`, `automerge.yml`, `pages.yml`.
 * `i18n.md` — canonical instructions for translation tasks. Re-read before doing any locale work.
 * `CHANGELOG.md` — hand-maintained. Add a user-visible entry for any user-visible change.
 
@@ -38,7 +41,7 @@ Top-level directories:
 
 `crates/snxcore/src/`:
 
-* `lib.rs` — crate root. Historically carried `#![deny(unsafe_code)]`; this was relaxed when Windows and macOS platform support landed (both need FFI). Keep `unsafe` confined to `platform/windows/` and `platform/macos/`; justify any new usage.
+* `lib.rs` — crate root. Historically carried `#![deny(unsafe_code)]`; this was relaxed when Windows and macOS platform support landed (both need FFI). Keep `unsafe` confined to the platform modules that opt in (Windows, macOS, Android) and the Android JNI crate; justify any new usage.
 * `server.rs` — command-mode server (unix socket on Linux / named pipe on Windows).
 * `controller.rs` — connection lifecycle orchestration.
 * `browser.rs` — browser-based SAML/IdP flow.
@@ -62,8 +65,9 @@ Per-OS platform modules under `crates/snxcore/src/platform/`:
 * `linux/` — `keychain.rs` (Secret Service), `resolver.rs` (systemd-resolved via D-Bus), `routing.rs` (rtnetlink), `xfrm.rs` (xfrmnetlink / netlink-packet-xfrm), `net.rs`, `stats.rs` (interface stats poller).
 * `windows/` — `firewall.rs`, `ipsec_stub.rs` (IPsec is not yet implemented on Windows), `keychain.rs` (Credential Manager), `machine_uuid.rs`, `net.rs`, `nrpt.rs` (Name Resolution Policy Table for split DNS), `resolver.rs`, `routing.rs`, `single_instance.rs`, `stats.rs`. Marked `#![allow(unsafe_code)]` because the Windows APIs require FFI.
 * `macos/` — `command_socket.rs` (filesystem-pinned local socket), `ipsec_stub.rs` (IPsec native kernel path not implemented; userspace TUN/ESP used instead), `keychain.rs` (Security.framework), `machine_uuid.rs` (gethostuuid), `net.rs` (utun device, ioctl SIOCAIFADDR/SIOCSIFMTU, interface stats via NET_RT_IFLIST2), `resolver.rs` (SCDynamicStore / SystemConfiguration split DNS), `routing.rs` (PF_ROUTE: split/full-route, utun-scoped gateway host route for keepalive/SCV, IPv6 blackhole, ip.forwarding), `single_instance.rs` (flock guard), `stats.rs`. Marked `#![allow(unsafe_code)]` because the macOS APIs require FFI. IPsec keepalive zeroes the UDP checksum with the undocumented `UDP_NOCKSUM` socket option (the gateway echoes the request's checksum) and binds the socket to utun with `IP_BOUND_IF`.
+* `android/` — the device, routes and DNS are staged (`staging.rs`) and handed to `VpnService.Builder` when the tunnel adopts the VpnService fd (`tun_fd.rs`); `runner.rs` drives login, the tunnel and reconnects; `jni_bridge.rs` is the `VpnServiceHandle` trait that `apps/snxrs-android` implements with JNI. Userspace ESP only. Marked `#![allow(unsafe_code)]` for one `setsockopt` (`SO_NO_CHECK`). Gateway sockets must be `VpnService.protect()`ed; the IKE TCPT socket gets this through the isakmp socket hook.
 
-The external `isakmp` crate (git dep: `https://github.com/ancwrd1/isakmp.git`) provides IKE/ISAKMP primitives used by the IPsec tunnel.
+The `isakmp` crate (upstream: `https://github.com/ancwrd1/isakmp.git`, vendored in `crates/isakmp` for the Android socket hook) provides IKE/ISAKMP primitives used by the IPsec tunnel.
 
 ### IKE versions
 
@@ -110,6 +114,9 @@ cross build --target=x86_64-unknown-linux-musl \
 cargo fmt --check
 cargo clippy --workspace --features mobile-access -- -D warnings
 cargo test  --workspace --features mobile-access
+
+# Android changes (NDK + cargo-ndk, see docs/android-build.md):
+cargo ndk -t arm64-v8a clippy -p snxrs-android -- -D warnings
 ```
 
 CI runs on `ubuntu-latest` / `x86_64-unknown-linux-gnu` / stable for Linux, and on `macos-latest` / `aarch64-apple-darwin` / stable for macOS (whole workspace including the GUI, with `vendored-openssl` and `mobile-access`). Clippy is `-D warnings` — do not land new warnings.
@@ -141,12 +148,12 @@ Defined on `snx-rs-gui`:
 ## Code style and conventions
 
 * `rustfmt.toml` sets `max_width = 120`. Run `cargo fmt` before committing.
-* Prefer safe wrapper crates (`nix`, `rtnetlink`, `xfrmnetlink`, `tun`, etc.) over raw FFI. The only places `unsafe` is expected are `crates/snxcore/src/platform/windows/` (Win32 FFI) and `crates/snxcore/src/platform/macos/` (macOS system APIs); both opt in via `#![allow(unsafe_code)]`. Do not introduce `unsafe` outside those modules without discussing with maintainers.
+* Prefer safe wrapper crates (`nix`, `rtnetlink`, `xfrmnetlink`, `tun`, etc.) over raw FFI. The only places `unsafe` is expected are `crates/snxcore/src/platform/windows/` (Win32 FFI), `crates/snxcore/src/platform/macos/` (macOS system APIs), `crates/snxcore/src/platform/android.rs` (`SO_NO_CHECK`) and `apps/snxrs-android` (JNI exports); all opt in via `#![allow(unsafe_code)]`. Do not introduce `unsafe` outside those modules without discussing with maintainers.
 * Errors flow through `anyhow::Result` at app boundaries; library code also uses `anyhow` (there is no custom error type at present).
 * Async runtime is `tokio` (multi-thread). Prefer `tokio::spawn` + channels over ad-hoc threading.
 * Secrets go through `secrecy::SecretString` / `ExposeSecret`. Do not log, format, or embed passwords / tokens into error strings.
 * Logging uses `tracing` + `tracing-subscriber`. Respect the `log-level` config option. `trace` level is documented as sensitive — do not downgrade that warning.
-* Platform-specific code belongs under `crates/snxcore/src/platform/<os>/` behind `#[cfg(target_os = "linux")]` / `#[cfg(target_os = "windows")]` / `#[cfg(target_os = "macos")]`. The `Platform` trait in `platform.rs` is the abstraction seam; add new functionality there first, then implement for each OS.
+* Platform-specific code belongs under `crates/snxcore/src/platform/<os>/` behind `#[cfg(target_os = "linux")]` / `#[cfg(target_os = "windows")]` / `#[cfg(target_os = "macos")]` / `#[cfg(target_os = "android")]`. The `Platform` trait in `platform.rs` is the abstraction seam; add new functionality there first, then implement for each OS.
 * Comments: the maintainer's stated AI policy (`docs/contributing.md`) is explicit — *no redundant per-line or per-function comments*. Only comment the non-obvious *why*. Machine-generated boilerplate comments will be rejected.
 
 ## User-facing strings must be localized
@@ -191,7 +198,7 @@ The GUI (`snx-rs-gui`) always runs unprivileged and talks to a `command`-mode `s
 * **Don't add redundant comments.** The contributing guide says so explicitly; this is the single most common cause of rejected AI patches in this repo.
 * **Don't hard-code user-visible English strings.** Route them through `tr!` and update the Fluent files.
 * **Don't run external commands to configure networking.** Since v5.3.0 the project deliberately uses OS APIs directly (Linux: `rtnetlink`, `xfrmnetlink`, systemd-resolved over D-Bus, `sysctl` crate; Windows: Win32 IpHelper / NRPT / WinSock via the `windows` crate; macOS: ioctl, PF_ROUTE, SystemConfiguration). Do not regress this by shelling out to `ip`, `resolvectl`, `iptables`, `netsh`, `route`, `networksetup`, etc.
-* **Don't introduce `unsafe` outside `platform/windows/` or `platform/macos/`.** Those are the only modules that opt into `unsafe` (Win32 FFI and macOS system APIs respectively). Everywhere else, use safe wrappers.
+* **Don't introduce `unsafe` outside `platform/windows/`, `platform/macos/`, `platform/android.rs` or `apps/snxrs-android`.** Those are the only modules that opt into `unsafe` (Win32 FFI, macOS system APIs, one Android `setsockopt`, JNI exports). Everywhere else, use safe wrappers.
 * **Don't add backwards-compat shims** for config flags that were renamed (e.g. `no-keychain` → `keychain` was flipped deliberately in 5.3.0). If you're changing a flag, change it cleanly and document in `CHANGELOG.md`.
 * **Don't bypass `secrecy`.** Passwords, IKE keys, tokens, and cert passwords must stay inside `SecretString` until the exact point of use.
 * **Don't forget MSRV.** Edition 2024 features are fine; `rustc 1.88+` features are fine; anything newer is not.

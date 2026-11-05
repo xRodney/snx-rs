@@ -86,18 +86,4 @@ object Profiles {
             append(key).append('=').append(value).append('\n')
         }
     }
-
-    /** First run of the profile-based UI: turn the old single-form settings into a profile. */
-    fun migrateLegacy(ctx: Context) {
-        if (ids(ctx).isNotEmpty()) return
-        val form = ctx.getSharedPreferences("form", Context.MODE_PRIVATE)
-        val id = create(ctx, form.getString("server", null)?.takeIf { it.isNotBlank() } ?: ctx.getString(R.string.profile_default_name))
-        prefs(ctx, id).edit().apply {
-            form.getString("server", null)?.let { putString("server-name", it) }
-            form.getString("login_type", null)?.let { putString("login-type", it) }
-            form.getString("username", null)?.let { putString("user-name", it) }
-            if (form.getBoolean("ignore_cert", false)) putBoolean("ignore-server-cert", true)
-        }.commit()
-        setSelected(ctx, id)
-    }
 }

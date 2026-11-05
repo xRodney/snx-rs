@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -27,16 +28,17 @@
 
         <activity
             android:name=".SettingsActivity"
-            android:exported="false"
-            android:label="@string/app_name" />
+            android:exported="false" />
 
         <activity
             android:name=".SsoActivity"
-            android:exported="false"
-            android:label="@string/app_name" />
+            android:exported="false" />
 
+        <!-- systemExempted needs no exact-alarm permission for the active VPN app, which this is once
+             the user has accepted the VpnService consent dialog. -->
         <service
             android:name=".VpnClientService"
+            tools:ignore="ForegroundServicePermission"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:foregroundServiceType="systemExempted"
             android:exported="false">

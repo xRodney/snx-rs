@@ -158,6 +158,9 @@ error-certificate-verify-failed = TLS validacija certifikata nije uspjela. Certi
 error-invalid-gateway-info = Nevažeći odgovor s informacijama pristupnika
 error-invalid-notification-level = Nevažeća razina obavijesti
 error-unsupported-login-type = Nepodržani tip prijave
+error-connection-in-progress = Povezivanje je već u tijeku; najprije prekinite vezu
+error-interactive-mfa-unsupported = Interaktivni MFA upiti još nisu podržani: {$prompt}
+error-unsupported-auth-factor = Nepodržani faktor autentifikacije: {$factor}
 
 # Placeholder texts
 placeholder-domains = Domene odvojene zarezom

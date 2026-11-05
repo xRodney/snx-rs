@@ -1,10 +1,3 @@
-//! `ResolverConfigurator` for Android.
-//!
-//! DNS servers and search domains are set on `VpnService.Builder` (`addDnsServer`,
-//! `addSearchDomain`) before `establish()`, so `configure` only stages them. Android's builder has
-//! no split-DNS primitive equivalent to macOS supplemental domains; `ResolverConfig::split_dns` is
-//! carried through but currently collapses to plain search domains (see docs/android-port.md).
-
 use async_trait::async_trait;
 
 use super::staging;
@@ -26,7 +19,6 @@ impl ResolverConfigurator for AndroidResolverConfigurator {
     }
 
     async fn cleanup(&self, _config: &ResolverConfig) -> anyhow::Result<()> {
-        // Stopping the VpnService drops its DNS; nothing to undo.
         Ok(())
     }
 }

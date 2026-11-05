@@ -9,12 +9,11 @@ import android.os.Handler
 import android.os.Looper
 
 /**
- * Tracks the network the tunnel's protected sockets leave through. A VPN app's own default network
- * is its VPN, so this follows the non-VPN networks and picks the one Android itself would prefer:
- * validated first, then anything over cellular.
+ * Follows the network that protected sockets leave through. A VPN app's own default network is its
+ * VPN, so this watches the non-VPN networks and picks the one Android would prefer: validated, then
+ * not cellular. Changes are debounced because Wi-Fi joins before it validates.
  *
- * [onChange] runs on the main thread with the new network (null when offline) and whether it differs
- * from the last network that was online, so that a short offline gap between two networks counts. Switches are debounced, since Wi-Fi joins before it validates.
+ * `switched` compares with the last network that was online, so a short offline gap still counts.
  */
 class NetworkMonitor(
     context: Context,

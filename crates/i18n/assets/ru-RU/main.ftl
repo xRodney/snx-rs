@@ -158,6 +158,9 @@ error-certificate-verify-failed = Проверка TLS-сертификата н
 error-invalid-gateway-info = Неверный ответ с информацией о шлюзе
 error-invalid-notification-level = Неверный уровень уведомлений
 error-unsupported-login-type = Неподдерживаемый тип входа
+error-connection-in-progress = Подключение уже выполняется; сначала отключитесь
+error-interactive-mfa-unsupported = Интерактивные запросы MFA пока не поддерживаются: {$prompt}
+error-unsupported-auth-factor = Неподдерживаемый фактор аутентификации: {$factor}
 
 # Placeholder texts
 placeholder-domains = Домены через запятую
