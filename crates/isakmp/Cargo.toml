@@ -18,7 +18,6 @@ hex = "0.4"
 tokio = { version = "1", features = ["time", "net", "sync", "rt", "io-util" ] }
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
-openssl = "0.10"
 async-trait = "0.1"
 tracing = "0.1"
 itertools = "0.15"
@@ -38,8 +37,8 @@ num-traits = "0.2"
 p256 = { version = "0.13", features = ["ecdh"] }
 p384 = { version = "0.13", features = ["ecdh"] }
 p521 = { version = "0.13", features = ["ecdh"] }
-rsa = { version = "0.9", features = ["sha1", "sha2"] }
-x509-parser = "0.16"
+rsa = { version = "0.9", features = ["sha1", "sha2", "pem"] }
+x509-parser = "0.18"
 subtle = "2"
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["rc", "derive"] }
@@ -49,11 +48,15 @@ pnet_macros = "0.35"
 pnet_macros_support = "0.35"
 ipnet = "2"
 secrecy = "0.10"
+p12-keystore = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
+# Test-only: self-signed cert generation + signature verification in the ikev2 session/service tests
+# still use OpenSSL. These are not compiled into the library or the Android target.
+openssl = "0.10"
 socket2 = "0.6"
 opener = "0.9"
 secrecy = "0.10"

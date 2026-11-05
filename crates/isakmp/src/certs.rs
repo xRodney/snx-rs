@@ -12,21 +12,23 @@ use cryptoki::{
     session::{Session, UserType},
     types::AuthPin,
 };
-use openssl::{
-    hash::MessageDigest,
-    pkcs12::Pkcs12,
-    pkey::{PKey, Private},
-    rsa::Padding,
-    stack::Stack,
-    x509::{X509, X509NameRef, X509StoreContext, store::X509StoreBuilder},
-};
+use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey, pkcs1v15::Pkcs1v15Sign, pkcs8::DecodePrivateKey};
 use secrecy::{ExposeSecret, SecretString};
-use tracing::{debug, trace};
+use tracing::debug;
+use x509_parser::prelude::{FromDer, X509Certificate};
 
-use crate::model::Identity;
+use crate::{
+    crypto::{DigestType, hash_chunks},
+    model::Identity,
+};
 
-fn from_der_or_pem(data: &[u8]) -> anyhow::Result<X509> {
-    Ok(X509::from_der(data).or_else(|_| X509::from_pem(data))?)
+/// Normalize a certificate to DER, accepting either DER or PEM input.
+fn to_der(data: &[u8]) -> anyhow::Result<Bytes> {
+    if X509Certificate::from_der(data).is_ok() {
+        return Ok(Bytes::copy_from_slice(data));
+    }
+    let (_, pem) = x509_parser::pem::parse_x509_pem(data).map_err(|e| anyhow!("Cannot parse certificate: {e}"))?;
+    Ok(Bytes::from(pem.contents))
 }
 
 /// Loads the client certificate an [`Identity`] names, alongside whether it
@@ -77,128 +79,103 @@ pub trait ClientCertificate {
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes>;
 }
 
-fn format_x509_name(name: &X509NameRef) -> String {
-    name.entries().map(|e| format!("{e:?}")).collect::<Vec<_>>().join(",")
-}
-
-pub struct CertList(Vec<X509>);
+/// A certificate chain held as DER. Accessors parse on demand with x509-parser;
+/// chain-path validation is not implemented here (it had no callers).
+pub struct CertList(Vec<Bytes>);
 
 impl CertList {
     pub fn from_ipsec(certs: &[&Bytes]) -> anyhow::Result<Self> {
-        let mut x509_list = Vec::new();
+        let mut list = Vec::with_capacity(certs.len());
         for cert in certs {
-            x509_list.push(from_der_or_pem(cert)?);
+            list.push(to_der(cert)?);
         }
-        Ok(Self(x509_list))
+        Ok(Self(list))
     }
 
-    pub fn verify(&self, ca_certs: &[Bytes]) -> anyhow::Result<()> {
-        debug!("Validating IPSec certificate: {}", self.subject_name());
-
-        trace!("Entity certificate: {:#?}", &self.0[0]);
-
-        debug!("Certificate issuer: {}", self.issuer_name());
-
-        let mut chain = Stack::new()?;
-
-        for cert in &self.0[1..] {
-            trace!("Chain certificate: {:#?}", cert);
-            chain.push(cert.clone())?;
-        }
-
-        let mut store_bldr = X509StoreBuilder::new()?;
-
-        for ca in ca_certs {
-            store_bldr.add_cert(from_der_or_pem(ca)?)?;
-        }
-
-        let store = store_bldr.build();
-
-        let mut context = X509StoreContext::new()?;
-        if context.init(&store, &self.0[0], &chain, |c| c.verify_cert())? {
-            debug!("IPSec certificate validation succeeded!");
-            Ok(())
-        } else {
-            Err(anyhow!("IPSec certificate validation failed!"))
+    fn with_first<T: Default>(&self, f: impl FnOnce(&X509Certificate) -> T) -> T {
+        match self.0.first() {
+            Some(der) => match X509Certificate::from_der(der) {
+                Ok((_, cert)) => f(&cert),
+                Err(_) => T::default(),
+            },
+            None => T::default(),
         }
     }
 
     pub fn issuer(&self) -> Bytes {
-        self.0
-            .first()
-            .and_then(|c| c.issuer_name().to_der().ok())
-            .unwrap_or_default()
-            .into()
+        self.with_first(|c| Bytes::copy_from_slice(c.issuer().as_raw()))
     }
 
     pub fn issuer_name(&self) -> String {
-        self.0
-            .first()
-            .map(|c| format_x509_name(c.issuer_name()))
-            .unwrap_or_default()
+        self.with_first(|c| c.issuer().to_string())
     }
 
     pub fn subject(&self) -> Bytes {
-        self.0
-            .first()
-            .and_then(|c| c.subject_name().to_der().ok())
-            .unwrap_or_default()
-            .into()
+        self.with_first(|c| Bytes::copy_from_slice(c.subject().as_raw()))
     }
 
     pub fn subject_name(&self) -> String {
-        self.0
-            .first()
-            .map(|c| format_x509_name(c.subject_name()))
-            .unwrap_or_default()
+        self.with_first(|c| c.subject().to_string())
     }
 
     pub fn fingerprint(&self) -> Bytes {
         self.0
             .first()
-            .map(|c| {
-                c.digest(MessageDigest::sha1())
-                    .map(|d| d.to_vec().into())
-                    .unwrap_or_default()
-            })
+            .map(|der| Bytes::from(hash_chunks(DigestType::Sha1, [der.as_ref()])))
             .unwrap_or_default()
     }
 
     pub fn certs(&self) -> Vec<Bytes> {
-        self.0.iter().flat_map(|c| c.to_der().map(|c| c.into())).collect()
+        self.0.clone()
     }
 }
 
 pub struct Pkcs8Certificate {
-    pkey: PKey<Private>,
+    key: RsaPrivateKey,
     certs: CertList,
 }
 
 impl Pkcs8Certificate {
     pub fn from_pkcs12(data: &[u8], password: &str) -> anyhow::Result<Self> {
-        let pkcs12 = Pkcs12::from_der(data)?;
-        let parsed = pkcs12.parse2(password)?;
-        if let (Some(pkey), Some(cert)) = (parsed.pkey, parsed.cert) {
-            let mut certs = vec![cert];
-            if let Some(ca) = parsed.ca {
-                certs.extend(ca);
-            }
-            Ok(Self {
-                pkey,
-                certs: CertList(certs),
-            })
-        } else {
-            Err(anyhow!("No certificate chain found in the PKCS12!"))
-        }
+        let store = p12_keystore::KeyStore::from_pkcs12(data, password, p12_keystore::Pkcs12ImportPolicy::Relaxed)
+            .map_err(|e| anyhow!("Cannot parse PKCS12: {e}"))?;
+
+        let (_, chain) = store
+            .private_key_chain()
+            .context("No private key chain found in the PKCS12!")?;
+
+        let key = RsaPrivateKey::from_pkcs8_der(chain.key().as_der())
+            .map_err(|e| anyhow!("PKCS12 private key is not a supported RSA key: {e}"))?;
+
+        let certs = chain
+            .certs()
+            .iter()
+            .map(|c| Bytes::copy_from_slice(c.as_der()))
+            .collect();
+
+        Ok(Self {
+            key,
+            certs: CertList(certs),
+        })
     }
 
     pub fn from_pkcs8(data: &[u8]) -> anyhow::Result<Self> {
-        let pkey = PKey::private_key_from_pem(data)?;
-        let stack = X509::stack_from_pem(data)?;
+        let pem = std::str::from_utf8(data).context("PKCS8 PEM is not valid UTF-8")?;
+        let key = RsaPrivateKey::from_pkcs8_pem(pem)
+            .or_else(|_| RsaPrivateKey::from_pkcs1_pem(pem))
+            .map_err(|e| anyhow!("Cannot parse private key: {e}"))?;
+
+        let mut certs = Vec::new();
+        for pem in x509_parser::pem::Pem::iter_from_buffer(data) {
+            let pem = pem.map_err(|e| anyhow!("Cannot parse PEM: {e}"))?;
+            if pem.label == "CERTIFICATE" {
+                certs.push(Bytes::from(pem.contents));
+            }
+        }
 
         Ok(Self {
-            pkey,
-            certs: CertList(stack.into_iter().collect()),
+            key,
+            certs: CertList(certs),
         })
     }
 }
@@ -229,10 +206,13 @@ impl ClientCertificate for Pkcs8Certificate {
     }
 
     fn sign(&self, data: &[u8]) -> anyhow::Result<Bytes> {
-        let mut buf = vec![0u8; self.pkey.size()];
-        let size = self.pkey.rsa()?.private_encrypt(data, &mut buf, Padding::PKCS1)?;
-
-        Ok(Bytes::copy_from_slice(&buf[0..size]))
+        // RSASSA-PKCS1-v1_5 over the raw input (the caller already supplies either the bare hash or
+        // the DigestInfo blob), i.e. no second DigestInfo prefix — matching OpenSSL private_encrypt.
+        let signature = self
+            .key
+            .sign(Pkcs1v15Sign::new_unprefixed(), data)
+            .map_err(|e| anyhow!("Signing failed: {e}"))?;
+        Ok(Bytes::from(signature))
     }
 }
 
@@ -286,7 +266,7 @@ impl Pkcs11Certificate {
             if let Some(Attribute::Value(value)) =
                 session.get_attributes(obj, &[AttributeType::Value])?.into_iter().next()
             {
-                certs.push(X509::from_der(&value)?);
+                certs.push(Bytes::from(value));
             }
         }
 
@@ -372,7 +352,6 @@ pub mod windows {
 
     use anyhow::anyhow;
     use bytes::Bytes;
-    use openssl::x509::X509;
     use tracing::debug;
     use windows_sys::Win32::{Foundation::GetLastError, Security::Cryptography::*};
 
@@ -439,17 +418,7 @@ pub mod windows {
                     }
                 };
 
-                let mut x509_list = Vec::with_capacity(chain.len());
-                for der in &chain {
-                    match X509::from_der(der) {
-                        Ok(x) => x509_list.push(x),
-                        Err(e) => {
-                            CertFreeCertificateContext(cert_context);
-                            return Err(e.into());
-                        }
-                    }
-                }
-                let certs = CertList(x509_list);
+                let certs = CertList(chain.iter().map(|der| Bytes::copy_from_slice(der)).collect());
 
                 debug!("Acquiring CNG private key (silent)");
 
