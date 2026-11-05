@@ -46,7 +46,7 @@ class VpnClientService : VpnService() {
     private var worker: Thread? = null
 
     // Implemented in apps/snxrs-android (Java_net_pankratov_snxrs_VpnClientService_*).
-    private external fun nativeConnect(configJson: String): Int
+    private external fun nativeConnect(configJson: String): String
     private external fun nativeDisconnect()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -57,10 +57,15 @@ class VpnClientService : VpnService() {
                     return START_STICKY
                 }
                 val configJson = intent.getStringExtra(EXTRA_CONFIG_JSON) ?: "{}"
-                startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+                ConnectionState.update(getString(R.string.state_connecting))
+                startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.state_connecting)))
                 worker = Thread {
-                    val rc = nativeConnect(configJson)
-                    Log.i(TAG, "nativeConnect returned $rc")
+                    val error = nativeConnect(configJson)
+                    Log.i(TAG, "nativeConnect finished: ${error.ifEmpty { "ok" }}")
+                    ConnectionState.update(
+                        if (error.isEmpty()) getString(R.string.state_disconnected)
+                        else getString(R.string.state_failed, error),
+                    )
                     cleanup()
                     stopSelf()
                 }.also { it.start() }
@@ -101,7 +106,8 @@ class VpnClientService : VpnService() {
             }
             val pfd = builder.establish() ?: return -1
             tunInterface = pfd
-            updateNotification("Connected")
+            ConnectionState.update(getString(R.string.state_connected))
+            updateNotification(getString(R.string.state_connected))
             pfd.detachFd()
         } catch (e: Exception) {
             Log.e(TAG, "establishTun failed", e)
@@ -113,7 +119,8 @@ class VpnClientService : VpnService() {
 
     /** Called from Rust for identity-provider (SSO) login: show the gateway's sign-in page in [SsoActivity]. */
     fun openUrl(url: String) {
-        updateNotification("Waiting for browser sign-in…")
+        ConnectionState.update(getString(R.string.state_signin))
+        updateNotification(getString(R.string.state_signin))
         startActivity(
             Intent(this, SsoActivity::class.java)
                 .putExtra(SsoActivity.EXTRA_URL, url)

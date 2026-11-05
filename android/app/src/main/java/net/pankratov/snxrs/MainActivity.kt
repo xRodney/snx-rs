@@ -38,9 +38,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var password: EditText
     private lateinit var ignoreCert: CheckBox
     private lateinit var status: TextView
+    private lateinit var connectionState: TextView
 
     private var loginTypeIds: List<String> = emptyList()
     private var loginTypeFactors: List<String> = emptyList()
+
+    private val stateListener: (String) -> Unit = { connectionState.text = it }
+
+    override fun onStart() {
+        super.onStart()
+        ConnectionState.observe(stateListener)
+    }
+
+    override fun onStop() {
+        ConnectionState.remove(stateListener)
+        super.onStop()
+    }
 
     private val prefs by lazy { getSharedPreferences("form", MODE_PRIVATE) }
 
@@ -62,6 +75,7 @@ class MainActivity : AppCompatActivity() {
         password = findViewById(R.id.password)
         ignoreCert = findViewById(R.id.ignore_cert)
         status = findViewById(R.id.status)
+        connectionState = findViewById(R.id.connection_state)
 
         prefs.getString("server", null)?.let { server.setText(it) }
         prefs.getString("username", null)?.let { username.setText(it) }
@@ -163,11 +177,9 @@ class MainActivity : AppCompatActivity() {
             .setAction(VpnClientService.ACTION_CONNECT)
             .putExtra(VpnClientService.EXTRA_CONFIG_JSON, config)
         startForegroundService(intent)
-        status.text = getString(R.string.status_connecting)
     }
 
     private fun onDisconnect() {
         startService(Intent(this, VpnClientService::class.java).setAction(VpnClientService.ACTION_DISCONNECT))
-        status.text = ""
     }
 }

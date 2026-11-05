@@ -54,6 +54,13 @@
             android:layout_height="wrap_content"
             android:text="@string/label_ignore_cert" />
 
+        <TextView
+            android:id="@+id/connection_state"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingVertical="8dp"
+            android:textAppearance="?attr/textAppearanceTitleMedium" />
+
         <Button
             android:id="@+id/connect"
             android:layout_width="match_parent"

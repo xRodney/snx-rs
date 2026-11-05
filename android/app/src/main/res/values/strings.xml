@@ -12,5 +12,9 @@
     <string name="status_loading">Loading login types…</string>
     <string name="status_loaded">%1$d login types loaded</string>
     <string name="status_pick_login_type">Load and pick a login type first</string>
-    <string name="status_connecting">Connecting… (see notification)</string>
+    <string name="state_connecting">Connecting…</string>
+    <string name="state_signin">Waiting for sign-in…</string>
+    <string name="state_connected">Connected</string>
+    <string name="state_disconnected">Disconnected</string>
+    <string name="state_failed">Disconnected: %1$s</string>
 </resources>

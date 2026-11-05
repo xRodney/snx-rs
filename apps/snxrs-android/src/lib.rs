@@ -21,7 +21,7 @@ mod android {
     use jni::{
         JNIEnv, JavaVM,
         objects::{GlobalRef, JObject, JString, JValue},
-        sys::{jboolean, jint, jstring},
+        sys::{jboolean, jstring},
     };
     use secrecy::SecretString;
     use serde::{Deserialize, Serialize};
@@ -286,22 +286,25 @@ mod android {
             .unwrap_or(std::ptr::null_mut())
     }
 
-    /// Instance method `private external fun nativeConnect(configJson: String): Int` — the second JNI
-    /// argument is the `VpnClientService` receiver (`this`).
+    /// Instance method `private external fun nativeConnect(configJson: String): String` — the second JNI
+    /// argument is the `VpnClientService` receiver (`this`). Returns "" on a clean stop, else the error.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeConnect(
         mut env: JNIEnv,
         service: JObject,
         config_json: JString,
-    ) -> jint {
+    ) -> jstring {
         init_logging();
-        match connect(&mut env, &service, config_json) {
-            Ok(()) => 0,
+        let message = match connect(&mut env, &service, config_json) {
+            Ok(()) => String::new(),
             Err(e) => {
                 error!("Connection failed: {e:#}");
-                1
+                format!("{e:#}")
             }
-        }
+        };
+        env.new_string(message)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
     }
 
     /// Instance method `private external fun nativeDisconnect()`.
