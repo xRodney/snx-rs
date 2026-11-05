@@ -100,6 +100,32 @@ can stay OpenSSL — it is never compiled for Android.
 5. Drop `openssl` from `crates/isakmp/Cargo.toml`. Build the Android target end-to-end with
    `cargo-ndk` (now NDK-free for crypto) and type-check the Android platform module.
 
+## Progress (this branch)
+
+- ✅ isakmp vendored at `crates/isakmp`.
+- ✅ `crypto.rs`, `esp.rs`, `ikev2/*`, `certs.rs` ported to RustCrypto. **The isakmp library is
+  OpenSSL-free** (`cargo tree -p isakmp -e normal -i openssl` is empty); OpenSSL is a dev-dependency
+  only, for test-cert generation. `cargo test -p isakmp` green (174 tests).
+- ✅ snxcore `auth.rs` X.509 → x509-parser.
+- ⬜ snxcore `ssl.rs` (tokio-rustls), `gateway.rs` (reqwest rustls + PKCS#12→PEM identity).
+- ⬜ Scope the `openssl` crate to `cfg(target_os = "linux")` (only `platform/linux.rs` uses it) and
+  drop the Windows/macOS/Android vendored-openssl deps once the TLS swap lands.
+
+## Correction: "NDK-free" was wrong
+
+An earlier note claimed the swap would make the Android build need no NDK. That is not achievable:
+
+- rustls needs a crypto provider — `ring` or `aws-lc-rs` — **both of which compile C/asm** and need a
+  C cross-compiler for Android. (`ring` is the Android-friendly choice via `cargo-ndk`.)
+- `rusqlite` with `bundled` compiles SQLite (C) too.
+
+So the realistic, still-worthwhile goal is **OpenSSL-free**, not C-free: `ring` + SQLite cross-compile
+cleanly with `cargo-ndk`, whereas vendored OpenSSL is the finicky one. The IKE/ESP crypto (isakmp) is
+genuinely pure-Rust now, which was the hardest part. The Android build will still use `cargo-ndk`.
+
+Provider choice for the snxcore TLS swap: pin **rustls + ring** (not aws-lc-rs) for the smoothest
+Android cross-compile.
+
 ## Verification reality
 
 Unit tests (isakmp known-answer + round-trip) and host compilation are the only checks available
