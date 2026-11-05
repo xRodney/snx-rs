@@ -184,8 +184,8 @@ mod android {
         params.mfa_code = cfg.mfa_code;
         params.ignore_server_cert = cfg.ignore_server_cert;
         params.tunnel_type = match cfg.tunnel_type.as_deref() {
-            Some("ssl") => TunnelType::Ssl,
-            _ => TunnelType::Ipsec,
+            Some("ssl") => TunnelType::SSL,
+            _ => TunnelType::IPsec,
         };
         params
     }
@@ -195,7 +195,7 @@ mod android {
         ONCE.get_or_init(|| {
             android_logger::init_once(
                 android_logger::Config::default()
-                    .with_max_level(tracing::log::LevelFilter::Debug)
+                    .with_max_level(log::LevelFilter::Debug)
                     .with_tag("snx-rs"),
             );
         });

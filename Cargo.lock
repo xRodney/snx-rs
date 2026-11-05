@@ -7341,13 +7341,13 @@ dependencies = [
  "anyhow",
  "ipnet",
  "jni 0.21.1",
+ "log",
  "secrecy",
  "serde",
  "serde_json",
  "snxcore",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

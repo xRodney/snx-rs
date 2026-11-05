@@ -34,7 +34,7 @@ pub mod android;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix;
 #[cfg(target_os = "windows")]
 mod windows;

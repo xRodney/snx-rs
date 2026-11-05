@@ -8,6 +8,7 @@ plugins {
 android {
     namespace = "net.pankratov.snxrs"
     compileSdk = 34
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "net.pankratov.snxrs"

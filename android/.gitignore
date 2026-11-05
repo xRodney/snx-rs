@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+# Produced by the cargoNdkBuild task from apps/snxrs-android
+app/src/main/jniLibs/

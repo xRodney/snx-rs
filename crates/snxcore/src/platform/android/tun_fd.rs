@@ -18,7 +18,7 @@ use super::{
 use crate::platform::RoutingConfig;
 
 /// Build `TunBuilderConfig` from the staged pieces, establish via the VpnService, wrap the fd.
-pub(super) fn adopt_from_staged() -> anyhow::Result<tun::AsyncDevice> {
+pub(crate) fn adopt_from_staged() -> anyhow::Result<tun::AsyncDevice> {
     let snap = staging::snapshot();
 
     let device = snap

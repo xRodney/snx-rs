@@ -2,11 +2,8 @@
 
 This builds `libsnxrs.so` (the Rust core) with cargo-ndk and packages it into an APK with Gradle.
 
-> Status: this is a bring-up build. The Rust Android code (the `apps/snxrs-android` cdylib, the
-> `snxcore::platform::android` modules, `snxcore::platform::android::run_tunnel`) has **not been
-> compiled on an Android target yet** — the dev container has no NDK. Expect to fix a few `jni` 0.21
-> call sites on the first `cargo-ndk` build. The IKE/ESP crypto (isakmp) is pure-Rust and tested;
-> OpenSSL (for the gateway TLS) is vendored and compiles under the NDK.
+> Status: builds end to end (verified with NDK r28c `28.2.13676358`, Android Studio's JBR 21, Gradle
+> 8.9 wrapper). Not yet tested on a device or against a real gateway.
 
 ## Prerequisites
 
@@ -20,8 +17,10 @@ This builds `libsnxrs.so` (the Rust core) with cargo-ndk and packages it into an
    ```
 3. **Android SDK + NDK** (via Android Studio's SDK Manager, or `sdkmanager`):
    - Platform `android-34`, build-tools 34.x
-   - NDK (r26+); set `ANDROID_NDK_HOME` (or `ANDROID_HOME`/`ndk/<version>`) so cargo-ndk finds it.
-4. **JDK 17** and Gradle (Android Studio bundles both).
+   - NDK `28.2.13676358` (pinned as `ndkVersion` in `app/build.gradle.kts`):
+     `sdkmanager --install "ndk;28.2.13676358"`. Set `ANDROID_HOME` and `ANDROID_NDK_HOME`.
+4. **A full JDK 17+ that ships `jlink`** — Android Studio's bundled `jbr` works; some distro
+   `openjdk-*-jre`/headless packages lack `jlink` and fail in `compileDebugJavaWithJavac`.
 
 ## Build
 
@@ -29,8 +28,9 @@ From the repo root:
 
 ```bash
 cd android
-# First time only (generates gradlew + the wrapper jar); Android Studio does this automatically:
-gradle wrapper --gradle-version 8.9
+export JAVA_HOME=/path/to/android-studio/jbr
+export ANDROID_HOME=~/Android/Sdk
+export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358
 
 # Debug APK (also compiles the .so for all three ABIs via the cargoNdkBuild task):
 ./gradlew assembleDebug

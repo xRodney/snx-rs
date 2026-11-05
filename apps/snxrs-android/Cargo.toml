@@ -21,7 +21,8 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 secrecy = "0.10"
-tracing = "0.1"
+# `log` makes tracing events from snxcore reach android_logger (logcat) when no tracing subscriber is set.
+tracing = { version = "0.1", features = ["log"] }
 
 # The JNI entry points and the tokio runtime only exist on Android. On any other target this crate
 # builds to an empty cdylib, which keeps `cargo build` on the workspace working on the host.
@@ -29,5 +30,5 @@ tracing = "0.1"
 jni = "0.21"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 ipnet = "2"
-tracing-subscriber = "0.3"
+log = "0.4"
 android_logger = "0.14"
