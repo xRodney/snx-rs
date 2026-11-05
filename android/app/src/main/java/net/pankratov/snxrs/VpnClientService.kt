@@ -1,29 +1,40 @@
 package net.pankratov.snxrs
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.provider.Settings
 import android.util.Log
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import org.json.JSONObject
 
 /**
- * Android VpnService that hosts the snx-rs Rust core (libsnxrs.so, built from the
- * apps/snxrs-android cdylib wrapper around snxcore + the `android-jni` feature).
+ * Android VpnService hosting the snx-rs Rust core (libsnxrs.so, from the apps/snxrs-android cdylib).
  *
- * Java -> Rust: [nativeConnect] / [nativeDisconnect] start and stop the tokio runtime + connection
- * controller. The controller drives the IPsec tunnel over the **userspace ESP data path** (snxcore's
- * `ipsec_native = false` forces it), so no root/XFRM is involved.
+ * Java -> Rust: [nativeConnect] / [nativeDisconnect] start/stop the tokio runtime + tunnel. The
+ * controller runs the IPsec userspace ESP path (snxcore's ipsec_native = false), so no root is used.
  *
- * Rust -> Java (via the `VpnServiceHandle` in platform/android/jni_bridge.rs):
- *  - [establishTun]: build the interface with VpnService.Builder and return its fd. This is the
- *    inversion that makes the desktop core fit Android — address/routes/DNS/MTU are declared here,
- *    before establish(), instead of being applied to a device the core created.
- *  - [protectSocket]: VpnService.protect() so gateway sockets bypass the tunnel.
- *  - [androidId] / [keystore*]: machine id and password storage.
+ * Rust -> Java (via the Rust VpnServiceHandle): [establishTun] builds the tunnel and returns its fd,
+ * [protectSocket] keeps gateway sockets off the tunnel, [androidId]/[keystore*] back machine-id and
+ * password storage.
  */
 class VpnClientService : VpnService() {
 
     companion object {
         private const val TAG = "snx-rs"
+        private const val CHANNEL_ID = "snx-rs-vpn"
+        private const val NOTIFICATION_ID = 1
+
+        const val ACTION_CONNECT = "net.pankratov.snxrs.CONNECT"
+        const val ACTION_DISCONNECT = "net.pankratov.snxrs.DISCONNECT"
+        const val EXTRA_CONFIG_JSON = "config_json"
 
         init {
             System.loadLibrary("snxrs")
@@ -31,69 +42,59 @@ class VpnClientService : VpnService() {
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
+    private var worker: Thread? = null
 
-    // --- native methods implemented in platform/android/jni_bridge.rs (feature android-jni) ---
-    private external fun nativeConnect(service: VpnClientService, configJson: String): Int
+    // Implemented in apps/snxrs-android (Java_net_pankratov_snxrs_VpnClientService_*).
+    private external fun nativeConnect(configJson: String): Int
     private external fun nativeDisconnect()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 val configJson = intent.getStringExtra(EXTRA_CONFIG_JSON) ?: "{}"
-                startForegroundNotification()
-                Thread { nativeConnect(this, configJson) }.start()
+                startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+                worker = Thread {
+                    val rc = nativeConnect(configJson)
+                    Log.i(TAG, "nativeConnect returned $rc")
+                    cleanup()
+                    stopSelf()
+                }.also { it.start() }
             }
             ACTION_DISCONNECT -> {
                 nativeDisconnect()
-                cleanup()
-                stopSelf()
             }
         }
         return START_STICKY
     }
 
     /**
-     * Called from Rust (`VpnServiceHandle::establish_tun`). Builds the tunnel interface from the
-     * config the core negotiated (office-mode address, pushed routes, DNS) and returns the raw fd.
-     * Returns -1 on failure.
-     *
-     * @param addressCidr   office-mode address as "a.b.c.d/prefix"
-     * @param mtu           interface MTU
-     * @param routes        destination routes "a.b.c.d/prefix"; empty => full tunnel ("0.0.0.0/0")
-     * @param dnsServers    DNS server IPv4 addresses
-     * @param searchDomains DNS search domains
+     * Called from Rust. `configJson` = {address, prefix, mtu, routes[], dns_servers[], search_domains[]}.
+     * Builds the tunnel and returns the raw fd (ownership transferred via detachFd), or -1 on failure.
      */
-    fun establishTun(
-        addressCidr: String,
-        mtu: Int,
-        routes: Array<String>,
-        dnsServers: Array<String>,
-        searchDomains: Array<String>,
-    ): Int {
+    fun establishTun(configJson: String): Int {
         return try {
+            val cfg = JSONObject(configJson)
             val builder = Builder().apply {
                 setSession("snx-rs")
-                setMtu(mtu)
+                setMtu(cfg.optInt("mtu", 1400))
+                addAddress(cfg.getString("address"), cfg.getInt("prefix"))
 
-                val (addr, prefix) = addressCidr.split("/").let { it[0] to it[1].toInt() }
-                addAddress(addr, prefix)
-
-                if (routes.isEmpty()) {
+                val routes = cfg.optJSONArray("routes")
+                if (routes == null || routes.length() == 0) {
                     addRoute("0.0.0.0", 0)
                 } else {
-                    for (r in routes) {
-                        val (rAddr, rPrefix) = r.split("/").let { it[0] to it[1].toInt() }
-                        addRoute(rAddr, rPrefix)
+                    for (i in 0 until routes.length()) {
+                        val (addr, prefix) = routes.getString(i).split("/")
+                        addRoute(addr, prefix.toInt())
                     }
                 }
 
-                for (dns in dnsServers) addDnsServer(dns)
-                for (dom in searchDomains) addSearchDomain(dom)
+                cfg.optJSONArray("dns_servers")?.let { for (i in 0 until it.length()) addDnsServer(it.getString(i)) }
+                cfg.optJSONArray("search_domains")?.let { for (i in 0 until it.length()) addSearchDomain(it.getString(i)) }
             }
-
             val pfd = builder.establish() ?: return -1
             tunInterface = pfd
-            // detachFd() transfers ownership to Rust, which closes it on teardown (close_fd_on_drop).
+            updateNotification("Connected")
             pfd.detachFd()
         } catch (e: Exception) {
             Log.e(TAG, "establishTun failed", e)
@@ -101,19 +102,46 @@ class VpnClientService : VpnService() {
         }
     }
 
-    /** Called from Rust before each gateway socket connects. */
     fun protectSocket(fd: Int): Boolean = protect(fd)
 
-    // --- machine id + keychain for platform/android/{machine_uuid,keychain}.rs ---
     fun androidId(): String =
-        android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
 
-    fun keystoreGet(key: String): String? = SecurePrefs.get(this, key)
-    fun keystoreSet(key: String, value: String) = SecurePrefs.set(this, key, value)
-    fun keystoreDelete(key: String) = SecurePrefs.delete(this, key)
+    fun keystoreGet(key: String): String? = securePrefs().getString(key, null)
+    fun keystoreSet(key: String, value: String) = securePrefs().edit().putString(key, value).apply()
+    fun keystoreDelete(key: String) = securePrefs().edit().remove(key).apply()
 
-    private fun startForegroundNotification() {
-        // TODO: NotificationChannel + startForeground(...) — a VpnService must run in the foreground.
+    private fun securePrefs() = EncryptedSharedPreferences.create(
+        this,
+        "snx-rs-secure",
+        MasterKey.Builder(this).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
+
+    private fun buildNotification(text: String): Notification {
+        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            mgr.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "VPN", NotificationManager.IMPORTANCE_LOW),
+            )
+        }
+        val pi = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun updateNotification(text: String) {
+        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        mgr.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
     private fun cleanup() {
@@ -127,14 +155,3 @@ class VpnClientService : VpnService() {
         super.onDestroy()
     }
 }
-
-/** Placeholder for EncryptedSharedPreferences-backed storage (androidx.security.crypto). */
-private object SecurePrefs {
-    fun get(service: VpnService, key: String): String? = TODO("EncryptedSharedPreferences")
-    fun set(service: VpnService, key: String, value: String): Unit = TODO("EncryptedSharedPreferences")
-    fun delete(service: VpnService, key: String): Unit = TODO("EncryptedSharedPreferences")
-}
-
-const val ACTION_CONNECT = "net.pankratov.snxrs.CONNECT"
-const val ACTION_DISCONNECT = "net.pankratov.snxrs.DISCONNECT"
-const val EXTRA_CONFIG_JSON = "config_json"

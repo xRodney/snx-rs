@@ -31,10 +31,13 @@ pub mod machine_uuid;
 pub mod net;
 pub mod resolver;
 pub mod routing;
+pub mod runner;
 pub mod single_instance;
 pub mod staging;
 pub mod stats;
 pub mod tun_fd;
+
+pub use runner::run_tunnel;
 
 impl UdpSocketExt for UdpSocket {
     // Kernel ESP-in-UDP encapsulation is only for the native XFRM path; the userspace ESP codec

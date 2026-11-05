@@ -106,38 +106,3 @@ pub fn keystore_set(key: &str, value: &str) -> anyhow::Result<()> {
 pub fn keystore_delete(key: &str) -> anyhow::Result<()> {
     with_handle(|h| h.keystore_delete(key))
 }
-
-// ---------------------------------------------------------------------------
-// JNI entry points (Java -> Rust).
-//
-// These are the `extern "system"` symbols the Kotlin `VpnClientService` binds with `external fun`.
-// The real bodies decode the jobject/jstring args with the `jni` crate, construct the concrete
-// `VpnServiceHandle`, and drive `crate::controller`. Compiled behind `android-jni`.
-// ---------------------------------------------------------------------------
-
-/// `external fun nativeConnect(service: VpnClientService, configJson: String): Int`
-#[cfg(feature = "android-jni")]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeConnect(
-    mut _env: jni::JNIEnv,
-    _service: jni::objects::JObject,
-    _config_json: jni::objects::JString,
-) -> jni::sys::jint {
-    // 1. let params: TunnelParams = serde_json::from_str(&env.get_string(&config_json)?)?;
-    // 2. let vm = env.get_java_vm()?; let service = env.new_global_ref(service)?;
-    //    set_handle(Box::new(AndroidVpnServiceHandle::new(vm, service)));
-    // 3. start the cached tokio runtime and spawn crate::controller::ServiceController on it,
-    //    forcing TunnelType::IPsec with the userspace ESP path (features.ipsec_native == false).
-    unimplemented!("wire up the jni crate, then start crate::controller")
-}
-
-/// `external fun nativeDisconnect()`
-#[cfg(feature = "android-jni")]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeDisconnect(
-    _env: jni::JNIEnv,
-    _service: jni::objects::JObject,
-) {
-    // signal the controller to disconnect, then clear_handle()
-    unimplemented!()
-}

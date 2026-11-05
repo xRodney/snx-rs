@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">snx-rs</string>
+    <string name="hint_server">VPN gateway (host or host:port)</string>
+    <string name="hint_login_type">Login type (e.g. vpn)</string>
+    <string name="hint_username">Username</string>
+    <string name="hint_password">Password</string>
+    <string name="label_ignore_cert">Ignore server certificate (testing only)</string>
+    <string name="label_connect">Connect</string>
+    <string name="label_disconnect">Disconnect</string>
+</resources>
