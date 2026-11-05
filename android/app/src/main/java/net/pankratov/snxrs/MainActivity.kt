@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.view.View
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -38,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
 
     private var loginTypeIds: List<String> = emptyList()
+    private var loginTypeFactors: List<String> = emptyList()
 
     private val prefs by lazy { getSharedPreferences("form", MODE_PRIVATE) }
 
@@ -68,6 +71,14 @@ class MainActivity : AppCompatActivity() {
             notifyLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
 
+        loginType.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) =
+                updateCredentialFields()
+
+            override fun onNothingSelected(parent: AdapterView<*>?) = updateCredentialFields()
+        }
+        updateCredentialFields()
+
         findViewById<Button>(R.id.load_login_types).setOnClickListener { loadLoginTypes() }
         findViewById<Button>(R.id.connect).setOnClickListener { onConnect() }
         findViewById<Button>(R.id.disconnect).setOnClickListener { onDisconnect() }
@@ -96,13 +107,16 @@ class MainActivity : AppCompatActivity() {
         }
         val arr = JSONArray(json)
         val ids = mutableListOf<String>()
+        val factors = mutableListOf<String>()
         val labels = mutableListOf<String>()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             ids += o.getString("id")
+            factors += o.getString("factors")
             labels += "${o.getString("name")} (${o.getString("factors")})"
         }
         loginTypeIds = ids
+        loginTypeFactors = factors
         loginType.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         val saved = prefs.getString("login_type", null)
         ids.indexOf(saved).takeIf { it >= 0 }?.let { loginType.setSelection(it) }
@@ -110,6 +124,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectedLoginType(): String? = loginTypeIds.getOrNull(loginType.selectedItemPosition)
+
+    /** Username/password only matter for login types with a password factor; SSO types don't use them. */
+    private fun updateCredentialFields() {
+        val factors = loginTypeFactors.getOrNull(loginType.selectedItemPosition)
+        val visibility = if (factors == null || "password" in factors) View.VISIBLE else View.GONE
+        username.visibility = visibility
+        password.visibility = visibility
+    }
 
     private fun onConnect() {
         if (selectedLoginType() == null) {

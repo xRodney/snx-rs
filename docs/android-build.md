@@ -56,8 +56,8 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ## Using the app
 
 Enter the gateway host and tap **Load login types**; pick one from the list the gateway offers. For
-password login types enter the username and password; for identity-provider (SSO) types such as Azure,
-leave the password empty — tapping **Connect** opens the sign-in page inside the app, and the code the
+password login types enter the username and password; for identity-provider (SSO) types such as Azure
+those fields are hidden — tapping **Connect** opens the sign-in page inside the app, and the code the
 page hands to `127.0.0.1:7779` is captured there. Accept the Android VPN consent dialog the first time.
 
 Logs: `adb logcat -s snx-rs`.
@@ -65,7 +65,6 @@ Logs: `adb logcat -s snx-rs`.
 Current limitations (see docs/android-port.md and docs/deopenssl-plan.md):
 - Interactive MFA prompts (e.g. a typed one-time code) and the Mobile Access portal are not supported yet.
 - Certificate (PKCS#12/PKCS#11) login is not wired into the app UI.
-- IPv6 is blocked while connected (the VPN carries IPv4 only); `allowFamily(AF_INET6)` would fix it.
 - AES-GCM-8 is unsupported (rarely negotiated).
 - Only IKEv1 has been exercised on a device.
 

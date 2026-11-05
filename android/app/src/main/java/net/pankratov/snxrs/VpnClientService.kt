@@ -10,6 +10,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.Settings
+import android.system.OsConstants
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -80,6 +81,8 @@ class VpnClientService : VpnService() {
             val cfg = JSONObject(configJson)
             val builder = Builder().apply {
                 setSession("snx-rs")
+                // The tunnel carries IPv4 only; without this Android blackholes all IPv6 while connected.
+                allowFamily(OsConstants.AF_INET6)
                 setMtu(cfg.optInt("mtu", 1400))
                 addAddress(cfg.getString("address"), cfg.getInt("prefix"))
 
