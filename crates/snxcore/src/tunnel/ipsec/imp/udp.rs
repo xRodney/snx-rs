@@ -76,7 +76,15 @@ impl UdpIPsecTunnel {
         let socket = {
             use crate::platform::{NetworkInterface, Platform, PlatformAccess};
             let local_ip = Platform::get().new_network_interface().get_default_ipv4().await?;
-            UdpSocket::bind(SocketAddr::from((local_ip, 0))).await?
+            let socket = UdpSocket::bind(SocketAddr::from((local_ip, 0))).await?;
+            // Android: keep the gateway-bound socket off the tunnel, or NAT-T traffic routes back
+            // into the VPN and deadlocks. Must happen before any datagram is sent to the gateway.
+            #[cfg(target_os = "android")]
+            {
+                use std::os::fd::AsRawFd;
+                crate::platform::android::jni_bridge::protect_socket(socket.as_raw_fd())?;
+            }
+            socket
         };
 
         let gateway_information = gateway_connector.get_gateway_information().await?;

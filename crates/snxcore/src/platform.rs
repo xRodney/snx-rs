@@ -10,6 +10,8 @@ use std::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use ipnet::Ipv4Net;
+#[cfg(target_os = "android")]
+use android::AndroidPlatformAccess as PlatformAccessImpl;
 #[cfg(target_os = "linux")]
 use linux::LinuxPlatformAccess as PlatformAccessImpl;
 #[cfg(target_os = "macos")]
@@ -26,6 +28,8 @@ use crate::model::{
     params::{TunnelParams, TunnelType},
 };
 
+#[cfg(target_os = "android")]
+pub mod android;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -202,7 +206,7 @@ impl ResolverConfigBuilder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RoutingConfig {
     Full {
         destination: Ipv4Addr,

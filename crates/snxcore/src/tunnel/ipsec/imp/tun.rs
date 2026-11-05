@@ -264,11 +264,16 @@ impl TunIPsecTunnel {
             .configure_device(&device_config)
             .await?;
 
-        let dev = tun.inner();
-        let tun_sender = dev.clone();
-        let tun_receiver = dev.clone();
-
-        self.tun_device = Some(tun);
+        // On desktop the device exists now, so capture it before configuring routes/DNS. On Android
+        // the VpnService fd does not exist until routes/DNS are declared, so the capture is deferred
+        // past setup_routing/setup_dns below (tun.inner() establishes lazily from the staged config).
+        #[cfg(not(target_os = "android"))]
+        let (tun_sender, tun_receiver) = {
+            let dev = tun.inner();
+            let pair = (dev.clone(), dev.clone());
+            self.tun_device = Some(tun);
+            pair
+        };
 
         let resolver_config = ResolverConfig::builder(self.params.clone(), Platform::get().get_features().await)
             .search_domains(&session.domains)
@@ -281,6 +286,15 @@ impl TunIPsecTunnel {
         if !self.params.no_dns {
             self.setup_dns(&resolver_config, &tun_name, false).await?;
         }
+
+        // Android: device/routes/DNS are now staged — establish the VpnService tunnel and adopt its fd.
+        #[cfg(target_os = "android")]
+        let (tun_sender, tun_receiver) = {
+            let dev = tun.inner();
+            let pair = (dev.clone(), dev.clone());
+            self.tun_device = Some(tun);
+            pair
+        };
 
         let mut snx_receiver = self.receiver.take().context("No receiver")?;
 
