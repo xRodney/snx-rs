@@ -10,6 +10,7 @@
 use std::os::fd::RawFd;
 
 use anyhow::{Context, anyhow};
+use ipnet::Ipv4Net;
 
 use super::{
     jni_bridge::{self, TunBuilderConfig},
@@ -27,7 +28,15 @@ pub(crate) fn adopt_from_staged() -> anyhow::Result<tun::AsyncDevice> {
 
     let (routes, gateway) = match snap.routing {
         Some(RoutingConfig::Full { destination, .. }) => (Vec::new(), Some(destination)),
-        Some(RoutingConfig::Split { destination, routes }) => (routes, Some(destination)),
+        // The keepalive targets the gateway and must travel inside the tunnel (desktop forces this per
+        // platform). The IKE and ESP sockets to the same address are protected, so they still bypass it.
+        Some(RoutingConfig::Split {
+            destination,
+            mut routes,
+        }) => {
+            routes.push(Ipv4Net::from(destination));
+            (routes, Some(destination))
+        }
         Some(RoutingConfig::Cleanup { destination, .. }) => (Vec::new(), Some(destination)),
         None => (Vec::new(), None),
     };

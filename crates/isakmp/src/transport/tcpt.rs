@@ -287,7 +287,7 @@ impl<M> TcptTransport<M> {
             }
             (None, Some(address)) => {
                 debug!("Connecting to {}", address);
-                let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await??;
+                let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, super::connect_tcp(address)).await??;
                 stream.set_nodelay(true)?;
 
                 debug!("Connected, starting TCPT handshake");

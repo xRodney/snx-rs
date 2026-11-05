@@ -29,6 +29,18 @@ pub async fn run_tunnel(
     command_receiver: mpsc::Receiver<TunnelCommand>,
     cancel: Arc<tokio::sync::Notify>,
 ) -> anyhow::Result<()> {
+    isakmp::transport::set_socket_hook(Some(Arc::new(|fd| super::jni_bridge::protect_socket(fd))));
+    let result = run(params, command_sender, command_receiver, cancel).await;
+    isakmp::transport::set_socket_hook(None);
+    result
+}
+
+async fn run(
+    params: Arc<TunnelParams>,
+    command_sender: mpsc::Sender<TunnelCommand>,
+    command_receiver: mpsc::Receiver<TunnelCommand>,
+    cancel: Arc<tokio::sync::Notify>,
+) -> anyhow::Result<()> {
     let factory = CheckPointConnectorFactory::default();
 
     let gateway = factory.new_gateway_connector(params.clone());

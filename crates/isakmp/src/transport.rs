@@ -1,4 +1,9 @@
-use std::{fmt, time::Duration};
+use std::{
+    fmt,
+    net::SocketAddr,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 
@@ -7,6 +12,32 @@ mod udp;
 
 pub use tcpt::{TcptDataType, TcptTransport};
 pub use udp::UdpTransport;
+
+/// Called with the raw socket of every outgoing connection before it connects. Lets an embedding app
+/// exempt the IKE channel from its own VPN (Android `VpnService.protect`).
+pub type SocketHook = Arc<dyn Fn(i32) -> anyhow::Result<()> + Send + Sync>;
+
+static SOCKET_HOOK: RwLock<Option<SocketHook>> = RwLock::new(None);
+
+pub fn set_socket_hook(hook: Option<SocketHook>) {
+    *SOCKET_HOOK.write().unwrap_or_else(|e| e.into_inner()) = hook;
+}
+
+pub(crate) async fn connect_tcp(address: SocketAddr) -> anyhow::Result<tokio::net::TcpStream> {
+    let socket = if address.is_ipv4() {
+        tokio::net::TcpSocket::new_v4()?
+    } else {
+        tokio::net::TcpSocket::new_v6()?
+    };
+
+    #[cfg(unix)]
+    if let Some(hook) = SOCKET_HOOK.read().unwrap_or_else(|e| e.into_inner()).clone() {
+        use std::os::fd::AsRawFd;
+        hook(socket.as_raw_fd())?;
+    }
+
+    Ok(socket.connect(address).await?)
+}
 
 /// A received message that may carry a fatal error notification. Each IKE
 /// version decides which notifies abort the exchange, so the transport calls

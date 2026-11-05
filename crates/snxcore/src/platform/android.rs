@@ -1,3 +1,5 @@
+#![allow(unsafe_code)] // SO_NO_CHECK via libc; JNI lives in jni_bridge
+
 //! Android platform implementation.
 //!
 //! Structured like `macos.rs`: native (kernel XFRM) IPsec is stubbed, so `ipsec_native = false`
@@ -39,6 +41,9 @@ pub mod tun_fd;
 
 pub use runner::{LoginTypeInfo, login_types, run_tunnel};
 
+// asm-generic/socket.h; the libc crate does not export it for Android targets.
+const SO_NO_CHECK: libc::c_int = 11;
+
 impl UdpSocketExt for UdpSocket {
     // Kernel ESP-in-UDP encapsulation is only for the native XFRM path; the userspace ESP codec
     // handles encapsulation itself, so this is a no-op (same as macOS).
@@ -46,10 +51,28 @@ impl UdpSocketExt for UdpSocket {
         Ok(())
     }
 
-    fn set_no_check(&self, _flag: bool) -> anyhow::Result<()> {
-        // SO_NO_CHECK is available on the Linux kernel; left as a no-op in the skeleton (the gateway
-        // echoes checksums). Implement via libc setsockopt if a gateway requires zero UDP checksums.
-        Ok(())
+    // The gateway echoes the request's UDP checksum in keepalive replies, so the request is sent with
+    // checksumming off (zero), as on Linux; otherwise the kernel drops the replies.
+    fn set_no_check(&self, flag: bool) -> anyhow::Result<()> {
+        use std::os::fd::AsRawFd;
+        let value: libc::c_int = flag.into();
+        let rc = unsafe {
+            libc::setsockopt(
+                self.as_raw_fd(),
+                libc::SOL_SOCKET,
+                SO_NO_CHECK,
+                (&value as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(i18n::tr!(
+                "error-so-no-check-failed",
+                code = std::io::Error::last_os_error()
+            )))
+        }
     }
 
     fn bind_to_tunnel(&self, _device: &str) -> anyhow::Result<()> {
