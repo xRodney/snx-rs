@@ -29,7 +29,7 @@ pub async fn run_tunnel(
     command_receiver: mpsc::Receiver<TunnelCommand>,
     cancel: Arc<tokio::sync::Notify>,
 ) -> anyhow::Result<()> {
-    isakmp::transport::set_socket_hook(Some(Arc::new(|fd| super::jni_bridge::protect_socket(fd))));
+    isakmp::transport::set_socket_hook(Some(Arc::new(super::jni_bridge::protect_socket)));
     let result = run(params, command_sender, command_receiver, cancel).await;
     isakmp::transport::set_socket_hook(None);
     result
