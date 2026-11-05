@@ -2,8 +2,9 @@
 
 This builds `libsnxrs.so` (the Rust core) with cargo-ndk and packages it into an APK with Gradle.
 
-> Status: builds end to end (verified with NDK r28c `28.2.13676358`, Android Studio's JBR 21, Gradle
-> 8.9 wrapper). Not yet tested on a device or against a real gateway.
+> Status: builds end to end (NDK r28c `28.2.13676358`, Android Studio's JBR 21, Gradle 8.9 wrapper)
+> and connects on a Galaxy S23 (Android 16) to a Check Point gateway over IKEv1 + ESP/UDP with Azure
+> SSO login: office-mode address, split routes, internal DNS and keepalive all work.
 
 ## Prerequisites
 
@@ -54,13 +55,19 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 ## Using the app
 
-Enter the gateway host, login type (e.g. `vpn`), username and password, tap **Connect**, and accept the
-Android VPN consent dialog. The service runs the IPsec userspace path.
+Enter the gateway host and tap **Load login types**; pick one from the list the gateway offers. For
+password login types enter the username and password; for identity-provider (SSO) types such as Azure,
+leave the password empty — tapping **Connect** opens the sign-in page inside the app, and the code the
+page hands to `127.0.0.1:7779` is captured there. Accept the Android VPN consent dialog the first time.
+
+Logs: `adb logcat -s snx-rs`.
 
 Current limitations (see docs/android-port.md and docs/deopenssl-plan.md):
-- Password / certificate auth only — interactive and browser/IdP MFA are rejected for now.
+- Interactive MFA prompts (e.g. a typed one-time code) and the Mobile Access portal are not supported yet.
+- Certificate (PKCS#12/PKCS#11) login is not wired into the app UI.
+- IPv6 is blocked while connected (the VPN carries IPv4 only); `allowFamily(AF_INET6)` would fix it.
 - AES-GCM-8 is unsupported (rarely negotiated).
-- Not yet tested against a real gateway; wire-level interop needs verification.
+- Only IKEv1 has been exercised on a device.
 
 ## CI alternative
 
