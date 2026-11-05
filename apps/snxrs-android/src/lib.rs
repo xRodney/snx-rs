@@ -72,6 +72,11 @@ mod android {
         })
     }
 
+    fn cancel() -> &'static std::sync::Arc<tokio::sync::Notify> {
+        static CANCEL: OnceLock<std::sync::Arc<tokio::sync::Notify>> = OnceLock::new();
+        CANCEL.get_or_init(Default::default)
+    }
+
     fn command_tx() -> &'static Mutex<Option<mpsc::Sender<TunnelCommand>>> {
         static TX: OnceLock<Mutex<Option<mpsc::Sender<TunnelCommand>>>> = OnceLock::new();
         TX.get_or_init(|| Mutex::new(None))
@@ -218,15 +223,21 @@ mod android {
         let cfg: AndroidConfig = serde_json::from_str(&json)?;
         let params = std::sync::Arc::new(build_params(cfg));
 
+        let (tx, rx) = mpsc::channel(16);
+        {
+            let mut slot = command_tx().lock().unwrap();
+            if slot.is_some() {
+                anyhow::bail!("A connection is already in progress; disconnect first");
+            }
+            *slot = Some(tx.clone());
+        }
+
         let vm = env.get_java_vm()?;
         let service = env.new_global_ref(service)?;
         jni_bridge::set_handle(Box::new(AndroidVpnServiceHandle { vm, service }));
 
-        let (tx, rx) = mpsc::channel(16);
-        *command_tx().lock().unwrap() = Some(tx.clone());
-
         // Blocks this (dedicated Java) thread until the tunnel stops.
-        let result = runtime().block_on(snxcore::platform::android::run_tunnel(params, tx, rx));
+        let result = runtime().block_on(snxcore::platform::android::run_tunnel(params, tx, rx, cancel().clone()));
 
         *command_tx().lock().unwrap() = None;
         jni_bridge::clear_handle();
@@ -296,8 +307,10 @@ mod android {
     /// Instance method `private external fun nativeDisconnect()`.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeDisconnect(_env: JNIEnv, _service: JObject) {
-        if let Some(tx) = command_tx().lock().unwrap().take() {
-            info!("Disconnect requested");
+        info!("Disconnect requested");
+        cancel().notify_waiters();
+        let tx = command_tx().lock().unwrap().clone();
+        if let Some(tx) = tx {
             let _ = tx.blocking_send(TunnelCommand::Terminate(true));
         }
     }

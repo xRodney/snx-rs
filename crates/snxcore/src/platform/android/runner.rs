@@ -20,10 +20,14 @@ use crate::{
 /// Authenticate and run the tunnel until a `Terminate` command or a fatal error. The caller owns both
 /// ends of the command channel: `command_sender` is handed to the tunnel (and kept for rekey), while
 /// `command_receiver` is what `Terminate` is delivered on from `nativeDisconnect`.
+///
+/// `cancel` aborts the authentication phase (e.g. a pending SSO sign-in) when notified; once the tunnel
+/// runs, `Terminate` on the command channel is the way to stop it.
 pub async fn run_tunnel(
     params: Arc<TunnelParams>,
     command_sender: mpsc::Sender<TunnelCommand>,
     command_receiver: mpsc::Receiver<TunnelCommand>,
+    cancel: Arc<tokio::sync::Notify>,
 ) -> anyhow::Result<()> {
     let factory = CheckPointConnectorFactory::default();
 
@@ -55,7 +59,10 @@ pub async fn run_tunnel(
                 // 127.0.0.1:7779, which the phone's browser reaches since it shares the loopback.
                 let listener = OtpListener::new().await?;
                 super::jni_bridge::open_url(&challenge.prompt)?;
-                let otp = listener.acquire_otp().await?;
+                let otp = tokio::select! {
+                    otp = listener.acquire_otp() => otp?,
+                    () = cancel.notified() => bail!("Sign-in cancelled"),
+                };
                 session = connector.challenge_code(session, &otp).await?;
             }
             other => bail!("Unsupported authentication factor on Android: {other:?}"),

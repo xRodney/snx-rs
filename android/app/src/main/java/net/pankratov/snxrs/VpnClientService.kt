@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -52,6 +51,10 @@ class VpnClientService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
+                if (worker?.isAlive == true) {
+                    Log.w(TAG, "Connect ignored: a connection attempt is already running")
+                    return START_STICKY
+                }
                 val configJson = intent.getStringExtra(EXTRA_CONFIG_JSON) ?: "{}"
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
                 worker = Thread {
@@ -105,10 +108,14 @@ class VpnClientService : VpnService() {
 
     fun protectSocket(fd: Int): Boolean = protect(fd)
 
-    /** Called from Rust for identity-provider (SSO) login: open the gateway's login page in the browser. */
+    /** Called from Rust for identity-provider (SSO) login: show the gateway's sign-in page in [SsoActivity]. */
     fun openUrl(url: String) {
         updateNotification("Waiting for browser sign-in…")
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        startActivity(
+            Intent(this, SsoActivity::class.java)
+                .putExtra(SsoActivity.EXTRA_URL, url)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 
     fun androidId(): String =
