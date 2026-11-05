@@ -3,12 +3,16 @@ package net.pankratov.snxrs
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.os.Bundle
+import android.os.Message
 import android.util.Log
+import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
@@ -32,31 +36,72 @@ class SsoActivity : AppCompatActivity() {
     @Volatile
     private var delivered = false
 
+    private lateinit var container: FrameLayout
+
+    private val client: WebViewClient = object : WebViewClient() {
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            if (!isOtpUrl(request.url)) return null
+            forwardOtp(request.url)
+            return WebResourceResponse("text/plain", "utf-8", 200, "OK", corsHeaders(), ByteArrayInputStream(ByteArray(0)))
+        }
+
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            if (!isOtpUrl(request.url)) return false
+            Thread { forwardOtp(request.url) }.start()
+            return true
+        }
+    }
+
+    // The sign-in page opens a second window (window.open) that completes the hand-off, so popups are
+    // created as stacked WebViews sharing the same interception.
+    private val chrome: WebChromeClient = object : WebChromeClient() {
+        override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+            Log.i(TAG, "SSO: page opened a popup window")
+            val popup = newWebView()
+            container.addView(popup)
+            (resultMsg.obj as WebView.WebViewTransport).webView = popup
+            resultMsg.sendToTarget()
+            return true
+        }
+
+        override fun onCloseWindow(window: WebView) {
+            Log.i(TAG, "SSO: popup window closed")
+            container.removeView(window)
+            window.destroy()
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
+    private fun newWebView(): WebView = WebView(this).apply {
+        layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.setSupportMultipleWindows(true)
+        settings.javaScriptCanOpenWindowsAutomatically = true
+        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+        webViewClient = client
+        webChromeClient = chrome
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val url = intent.getStringExtra(EXTRA_URL) ?: return finish()
 
-        val web = WebView(this)
-        setContentView(web)
-        web.settings.javaScriptEnabled = true
-        web.settings.domStorageEnabled = true
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
+        container = FrameLayout(this)
+        setContentView(container)
+        val main = newWebView()
+        container.addView(main)
+        main.loadUrl(url)
+    }
 
-        web.webViewClient = object : WebViewClient() {
-            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                if (!isOtpUrl(request.url)) return null
-                forwardOtp(request.url)
-                return WebResourceResponse("text/plain", "utf-8", 200, "OK", corsHeaders(), ByteArrayInputStream(ByteArray(0)))
-            }
-
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                if (!isOtpUrl(request.url)) return false
-                Thread { forwardOtp(request.url) }.start()
-                return true
-            }
+    @Deprecated("Back navigates within the sign-in pages before leaving")
+    override fun onBackPressed() {
+        val top = container.getChildAt(container.childCount - 1) as? WebView
+        when {
+            top != null && top.canGoBack() -> top.goBack()
+            container.childCount > 1 && top != null -> { container.removeView(top); top.destroy() }
+            else -> super.onBackPressed()
         }
-        web.loadUrl(url)
     }
 
     private fun isOtpUrl(uri: Uri): Boolean =
