@@ -1,5 +1,8 @@
 use std::net::Ipv4Addr;
 
+#[cfg(target_os = "android")]
+use ipnet::Ipv4Net;
+
 use crate::platform::ResolverConfig;
 use crate::{
     model::{params::TunnelParams, proto::HelloReplyData},
@@ -17,6 +20,7 @@ pub struct TunDevice {
 }
 
 impl TunDevice {
+    #[cfg(not(target_os = "android"))]
     pub fn new(name: &str, reply: &HelloReplyData) -> anyhow::Result<Self> {
         let mut config = platform::new_tun_config();
         let ipaddr = reply.office_mode.ipaddr.parse::<Ipv4Addr>()?;
@@ -42,12 +46,62 @@ impl TunDevice {
         })
     }
 
+    // Android: do NOT create a device here. The fd is minted by `VpnService.establish()`, which can
+    // only run after routes/DNS are known. `setup_routing`/`setup_dns` stage that config; the device
+    // is adopted lazily in `take_inner`.
+    #[cfg(target_os = "android")]
+    pub fn new(name: &str, reply: &HelloReplyData) -> anyhow::Result<Self> {
+        let ipaddr = reply.office_mode.ipaddr.parse::<Ipv4Addr>()?;
+        Ok(Self {
+            inner: None,
+            reply: reply.clone(),
+            dev_name: name.to_string(),
+            ipaddr,
+        })
+    }
+
     pub fn name(&self) -> &str {
         &self.dev_name
     }
 
+    #[cfg(not(target_os = "android"))]
     pub fn take_inner(&mut self) -> Option<tun::AsyncDevice> {
         self.inner.take()
+    }
+
+    // Android: now that routing + DNS have been staged by `setup_routing`/`setup_dns`, ask the
+    // VpnService to build the tunnel and adopt the returned fd.
+    #[cfg(target_os = "android")]
+    pub fn take_inner(&mut self) -> Option<tun::AsyncDevice> {
+        use crate::platform::android::{jni_bridge::TunBuilderConfig, net, resolver, tun_fd};
+
+        let routing = net::take_staged_routing();
+        let dns = resolver::take_staged_dns();
+
+        let prefix_len = self
+            .reply
+            .optional
+            .as_ref()
+            .and_then(|o| o.subnet.parse::<Ipv4Addr>().ok())
+            .map(|m| u32::from(m).count_ones() as u8)
+            .unwrap_or(32);
+
+        let config = TunBuilderConfig {
+            address: Ipv4Net::new(self.ipaddr, prefix_len).ok()?,
+            mtu: 1400, // TODO: derive from gateway reply if a field is available
+            routes: if routing.default_route { Vec::new() } else { routing.routes },
+            dns_servers: dns.dns_servers.iter().filter_map(|s| s.parse().ok()).collect(),
+            search_domains: dns.search_domains,
+            bypass: routing.bypass,
+        };
+
+        match tun_fd::adopt_from_vpn_service(&config) {
+            Ok(dev) => Some(dev),
+            Err(e) => {
+                tracing::error!("Failed to adopt VpnService fd: {e:#}");
+                None
+            }
+        }
     }
 
     pub async fn setup_routing(&self, params: &TunnelParams) -> anyhow::Result<()> {

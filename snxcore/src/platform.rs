@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use ipnet::Ipv4Net;
 use tokio::net::UdpSocket;
 
+#[cfg(target_os = "android")]
+use android as platform_impl;
 #[cfg(target_os = "linux")]
 use linux as platform_impl;
 pub use platform_impl::{
@@ -18,6 +20,8 @@ pub use platform_impl::{
 
 use crate::model::{params::TunnelParams, IpsecSession};
 
+#[cfg(target_os = "android")]
+pub mod android;
 #[cfg(target_os = "linux")]
 mod linux;
 
