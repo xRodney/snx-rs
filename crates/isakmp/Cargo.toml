@@ -23,6 +23,25 @@ async-trait = "0.1"
 tracing = "0.1"
 itertools = "0.15"
 cryptoki = "0.12"
+# RustCrypto stack replacing OpenSSL (migration in progress; see docs/deopenssl-plan.md).
+digest = "0.10"
+md-5 = { version = "0.10", features = ["oid"] }
+sha1 = { version = "0.10", features = ["oid"] }
+sha2 = { version = "0.10", features = ["oid"] }
+hmac = "0.12"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+des = "0.8"
+aes-gcm = "0.10"
+num-bigint = "0.4"
+num-traits = "0.2"
+p256 = { version = "0.13", features = ["ecdh"] }
+p384 = { version = "0.13", features = ["ecdh"] }
+p521 = { version = "0.13", features = ["ecdh"] }
+rsa = { version = "0.9", features = ["sha1", "sha2"] }
+x509-parser = "0.16"
+subtle = "2"
+rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["rc", "derive"] }
 rmp-serde = "1"
 pnet_packet = "0.35"
