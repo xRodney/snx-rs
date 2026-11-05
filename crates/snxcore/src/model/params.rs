@@ -779,8 +779,15 @@ impl TunnelParams {
     }
 
     pub fn load<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let mut params = Self::default();
         let data = fs::read_to_string(&path)?;
+        let mut params = Self::parse(data)?;
+        path.as_ref().clone_into(&mut params.config_file);
+        Ok(params)
+    }
+
+    /// Parses config-file text (`key=value` lines, base64 `password`), as [`TunnelParams::load`] does.
+    pub fn parse<S: AsRef<str>>(data: S) -> anyhow::Result<Self> {
+        let mut params = Self::default();
         let config = util::parse_config(data)?;
 
         for (k, v) in config.into_iter() {
@@ -853,7 +860,6 @@ impl TunnelParams {
                 }
             }
         }
-        path.as_ref().clone_into(&mut params.config_file);
         params.decode_password()?;
 
         Ok(params)

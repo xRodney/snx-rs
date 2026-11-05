@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Keys are snx-rs config-file option names (see docs/options.md). -->
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory app:title="@string/cat_connection" app:iconSpaceReserved="false">
+        <EditTextPreference app:key="profile-name" app:title="@string/opt_profile_name"
+            app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="server-name" app:title="@string/opt_server_name"
+            app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <Preference app:key="_load_login_types" app:title="@string/label_load_login_types"
+            app:summary="@string/opt_load_login_types_summary" app:iconSpaceReserved="false" />
+        <ListPreference app:key="login-type" app:title="@string/opt_login_type"
+            app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="user-name" app:title="@string/opt_user_name"
+            app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="password" app:title="@string/opt_password" app:iconSpaceReserved="false" />
+        <ListPreference app:key="tunnel-type" app:title="@string/opt_tunnel_type"
+            app:entries="@array/tunnel_type_labels" app:entryValues="@array/tunnel_type_values"
+            app:defaultValue="ipsec" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <ListPreference app:key="ike-version" app:title="@string/opt_ike_version"
+            app:entries="@array/ike_version_labels" app:entryValues="@array/ike_version_values"
+            app:defaultValue="auto" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <ListPreference app:key="transport-type" app:title="@string/opt_transport_type"
+            app:entries="@array/transport_type_labels" app:entryValues="@array/transport_type_values"
+            app:defaultValue="auto" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="@string/cat_certificates" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat app:key="ignore-server-cert" app:title="@string/opt_ignore_server_cert"
+            app:summary="@string/opt_ignore_server_cert_summary" app:iconSpaceReserved="false" />
+        <Preference app:key="ca-cert" app:title="@string/opt_ca_cert" app:iconSpaceReserved="false" />
+        <ListPreference app:key="tls-version-max" app:title="@string/opt_tls_version_max"
+            app:entries="@array/tls_version_labels" app:entryValues="@array/tls_version_values"
+            app:defaultValue="default" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <ListPreference app:key="cert-type" app:title="@string/opt_cert_type"
+            app:entries="@array/cert_type_labels" app:entryValues="@array/cert_type_values"
+            app:defaultValue="none" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <Preference app:key="cert-path" app:title="@string/opt_cert_path" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="cert-password" app:title="@string/opt_cert_password" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="@string/cat_routing" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat app:key="default-route" app:title="@string/opt_default_route"
+            app:summary="@string/opt_default_route_summary" app:iconSpaceReserved="false" />
+        <SwitchPreferenceCompat app:key="no-routing" app:title="@string/opt_no_routing"
+            app:summary="@string/opt_no_routing_summary" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="add-routes" app:title="@string/opt_add_routes"
+            app:dialogMessage="@string/hint_comma_subnets" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="ignore-routes" app:title="@string/opt_ignore_routes"
+            app:dialogMessage="@string/hint_comma_subnets" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="@string/cat_dns" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat app:key="no-dns" app:title="@string/opt_no_dns"
+            app:summary="@string/opt_no_dns_summary" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="dns-servers" app:title="@string/opt_dns_servers"
+            app:dialogMessage="@string/hint_comma_ips" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="ignore-dns-servers" app:title="@string/opt_ignore_dns_servers"
+            app:dialogMessage="@string/hint_comma_ips" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="search-domains" app:title="@string/opt_search_domains"
+            app:dialogMessage="@string/hint_comma_domains" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="ignore-search-domains" app:title="@string/opt_ignore_search_domains"
+            app:dialogMessage="@string/hint_comma_domains" app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory app:title="@string/cat_advanced" app:iconSpaceReserved="false">
+        <EditTextPreference app:key="mtu" app:title="@string/opt_mtu" app:defaultValue="1350"
+            app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="password-factor" app:title="@string/opt_password_factor"
+            app:dialogMessage="@string/opt_password_factor_hint" app:defaultValue="1"
+            app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <SwitchPreferenceCompat app:key="no-keepalive" app:title="@string/opt_no_keepalive" app:iconSpaceReserved="false" />
+        <SwitchPreferenceCompat app:key="port-knock" app:title="@string/opt_port_knock" app:iconSpaceReserved="false" />
+        <SwitchPreferenceCompat app:key="use-internal-gateway-ip" app:title="@string/opt_use_internal_gateway_ip"
+            app:iconSpaceReserved="false" />
+        <SwitchPreferenceCompat app:key="ike-persist" app:title="@string/opt_ike_persist"
+            app:summary="@string/opt_ike_persist_summary" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="ike-lifetime" app:title="@string/opt_ike_lifetime" app:defaultValue="28800"
+            app:useSimpleSummaryProvider="true" app:iconSpaceReserved="false" />
+        <EditTextPreference app:key="ip-lease-time" app:title="@string/opt_ip_lease_time"
+            app:dialogMessage="@string/opt_ip_lease_time_hint" app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+</PreferenceScreen>

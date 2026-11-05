@@ -21,35 +21,16 @@ mod android {
     use jni::{
         JNIEnv, JavaVM,
         objects::{GlobalRef, JObject, JString, JValue},
-        sys::{jboolean, jstring},
+        sys::jstring,
     };
-    use secrecy::SecretString;
-    use serde::{Deserialize, Serialize};
+    use serde::Serialize;
     use snxcore::{
-        model::params::{TunnelParams, TunnelType},
+        model::params::TunnelParams,
         platform::android::jni_bridge::{self, TunBuilderConfig, VpnServiceHandle},
         tunnel::TunnelCommand,
     };
     use tokio::sync::mpsc;
     use tracing::{error, info};
-
-    /// Config the app passes to `nativeConnect` as JSON. Only the fields a minimal client needs; the
-    /// rest fall back to `TunnelParams::default()`.
-    #[derive(Debug, Default, Deserialize)]
-    struct AndroidConfig {
-        server_name: String,
-        login_type: String,
-        #[serde(default)]
-        user_name: String,
-        #[serde(default)]
-        password: String,
-        #[serde(default)]
-        mfa_code: Option<String>,
-        #[serde(default)]
-        tunnel_type: Option<String>,
-        #[serde(default)]
-        ignore_server_cert: bool,
-    }
 
     /// What `establishTun` receives as JSON on the Java side.
     #[derive(Serialize)]
@@ -192,19 +173,12 @@ mod android {
         }
     }
 
-    fn build_params(cfg: AndroidConfig) -> TunnelParams {
-        let mut params = TunnelParams::default();
-        params.server_name = cfg.server_name;
-        params.login_type = cfg.login_type;
-        params.user_name = cfg.user_name;
-        params.password = SecretString::from(cfg.password);
-        params.mfa_code = cfg.mfa_code;
-        params.ignore_server_cert = cfg.ignore_server_cert;
-        params.tunnel_type = match cfg.tunnel_type.as_deref() {
-            Some("ssl") => TunnelType::SSL,
-            _ => TunnelType::IPsec,
-        };
-        params
+    /// Profile text in the desktop config-file format, parsed by the same code as `snx-rs.conf`.
+    fn parse_profile(env: &mut JNIEnv, config: &JString) -> anyhow::Result<TunnelParams> {
+        let text: String = env.get_string(config)?.into();
+        let mut params = TunnelParams::parse(text)?;
+        runtime().block_on(params.load_cert_data())?;
+        Ok(params)
     }
 
     fn init_logging() {
@@ -218,10 +192,8 @@ mod android {
         });
     }
 
-    fn connect(env: &mut JNIEnv, service: &JObject, config_json: JString) -> anyhow::Result<()> {
-        let json: String = env.get_string(&config_json)?.into();
-        let cfg: AndroidConfig = serde_json::from_str(&json)?;
-        let params = std::sync::Arc::new(build_params(cfg));
+    fn connect(env: &mut JNIEnv, service: &JObject, config: JString) -> anyhow::Result<()> {
+        let params = std::sync::Arc::new(parse_profile(env, &config)?);
 
         let (tx, rx) = mpsc::channel(16);
         {
@@ -251,10 +223,8 @@ mod android {
         factors: String,
     }
 
-    fn login_types_json(env: &mut JNIEnv, server: JString, ignore_cert: bool) -> anyhow::Result<String> {
-        let mut params = TunnelParams::default();
-        params.server_name = env.get_string(&server)?.into();
-        params.ignore_server_cert = ignore_cert;
+    fn login_types_json(env: &mut JNIEnv, config: JString) -> anyhow::Result<String> {
+        let params = parse_profile(env, &config)?;
         let types = runtime().block_on(snxcore::platform::android::login_types(std::sync::Arc::new(params)))?;
         let out: Vec<LoginTypeJson> = types
             .into_iter()
@@ -267,17 +237,16 @@ mod android {
         Ok(serde_json::to_string(&out)?)
     }
 
-    /// Instance method `MainActivity.nativeLoginTypes(server: String, ignoreCert: Boolean): String`.
+    /// `Native.loginTypes(config: String): String` (static) — profile text in config-file format.
     /// Returns a JSON array of `{id, name, factors}`, or `{"error": "..."}`. Blocks; call off the UI thread.
     #[unsafe(no_mangle)]
-    pub extern "system" fn Java_net_pankratov_snxrs_MainActivity_nativeLoginTypes(
+    pub extern "system" fn Java_net_pankratov_snxrs_Native_loginTypes(
         mut env: JNIEnv,
-        _activity: JObject,
-        server: JString,
-        ignore_cert: jboolean,
+        _class: jni::objects::JClass,
+        config: JString,
     ) -> jstring {
         init_logging();
-        let json = login_types_json(&mut env, server, ignore_cert != 0).unwrap_or_else(|e| {
+        let json = login_types_json(&mut env, config).unwrap_or_else(|e| {
             error!("Fetching login types failed: {e:#}");
             serde_json::json!({ "error": format!("{e:#}") }).to_string()
         });
@@ -286,16 +255,16 @@ mod android {
             .unwrap_or(std::ptr::null_mut())
     }
 
-    /// Instance method `private external fun nativeConnect(configJson: String): String` — the second JNI
+    /// Instance method `private external fun nativeConnect(config: String): String` — the second JNI
     /// argument is the `VpnClientService` receiver (`this`). Returns "" on a clean stop, else the error.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeConnect(
         mut env: JNIEnv,
         service: JObject,
-        config_json: JString,
+        config: JString,
     ) -> jstring {
         init_logging();
-        let message = match connect(&mut env, &service, config_json) {
+        let message = match connect(&mut env, &service, config) {
             Ok(()) => String::new(),
             Err(e) => {
                 error!("Connection failed: {e:#}");

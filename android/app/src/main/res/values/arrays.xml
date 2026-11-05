@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="tunnel_type_labels"><item>IPsec</item><item>SSL</item></string-array>
+    <string-array name="tunnel_type_values"><item>ipsec</item><item>ssl</item></string-array>
+    <string-array name="ike_version_labels"><item>Auto</item><item>IKEv1</item><item>IKEv2</item></string-array>
+    <string-array name="ike_version_values"><item>auto</item><item>1</item><item>2</item></string-array>
+    <!-- "kernel" (native XFRM) is Linux-only. -->
+    <string-array name="transport_type_labels"><item>Auto</item><item>UDP</item><item>TCPT</item></string-array>
+    <string-array name="transport_type_values"><item>auto</item><item>udp</item><item>tcpt</item></string-array>
+    <string-array name="tls_version_labels"><item>Default</item><item>TLS 1.2</item><item>TLS 1.3</item></string-array>
+    <string-array name="tls_version_values"><item>default</item><item>1.2</item><item>1.3</item></string-array>
+    <!-- PKCS#11 tokens and the Windows system store are not available on Android. -->
+    <string-array name="cert_type_labels"><item>None</item><item>PKCS#12</item><item>PKCS#8 (PEM)</item></string-array>
+    <string-array name="cert_type_values"><item>none</item><item>pkcs12</item><item>pkcs8</item></string-array>
+</resources>

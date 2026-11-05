@@ -23,7 +23,7 @@ pub fn set_socket_hook(hook: Option<SocketHook>) {
     *SOCKET_HOOK.write().unwrap_or_else(|e| e.into_inner()) = hook;
 }
 
-pub(crate) async fn connect_tcp(address: SocketAddr) -> anyhow::Result<tokio::net::TcpStream> {
+pub async fn connect_tcp(address: SocketAddr) -> anyhow::Result<tokio::net::TcpStream> {
     let socket = if address.is_ipv4() {
         tokio::net::TcpSocket::new_v4()?
     } else {

@@ -55,16 +55,24 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 ## Using the app
 
-Enter the gateway host and tap **Load login types**; pick one from the list the gateway offers. For
-password login types enter the username and password; for identity-provider (SSO) types such as Azure
-those fields are hidden — tapping **Connect** opens the sign-in page inside the app, and the code the
-page hands to `127.0.0.1:7779` is captured there. Accept the Android VPN consent dialog the first time.
+The main screen picks a **profile** and connects/disconnects; **Edit** opens the profile's settings,
+**New**/**Delete** manage profiles. Settings mirror the desktop options that apply on Android, grouped as
+Connection, Certificates, Routing, DNS and Advanced, and are stored per profile (encrypted) under the
+same keys as `snx-rs.conf`; on connect the profile is rendered as config-file text and parsed by
+snxcore's own config parser. In the profile, set the gateway, tap **Load login types from gateway** and
+pick one. Username/password are hidden for identity-provider (SSO) login types: **Connect** then opens
+the sign-in page inside the app. CA and client certificate files are picked with the system file picker
+and copied into app-private storage.
+
+Not offered on Android: kernel transport, PKCS#11 tokens, split DNS / routing domains, IP forwarding,
+keychain, themes and notification level.
 
 Logs: `adb logcat -s snx-rs`.
 
 Current limitations (see docs/android-port.md and docs/deopenssl-plan.md):
 - Interactive MFA prompts (e.g. a typed one-time code) and the Mobile Access portal are not supported yet.
-- Certificate (PKCS#12/PKCS#11) login is not wired into the app UI.
+- Certificate login (PKCS#12/PKCS#8) is configurable but untested on a device.
+- The SSL tunnel type is configurable but untested on a device.
 - AES-GCM-8 is unsupported (rarely negotiated).
 - Only IKEv1 has been exercised on a device.
 

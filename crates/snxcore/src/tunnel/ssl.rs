@@ -104,7 +104,8 @@ impl SslTunnel {
 
         let gateway_address = util::server_name_to_ipv4(&params.server_name, info.connectivity_info.tcpt_port)?;
 
-        let tcp = tokio::net::TcpStream::connect((gateway_address, info.connectivity_info.tcpt_port)).await?;
+        // Through isakmp's connect so an embedding app's socket hook applies (Android protects it from its VPN).
+        let tcp = isakmp::transport::connect_tcp((gateway_address, info.connectivity_info.tcpt_port).into()).await?;
         tcp.set_nodelay(true)?;
 
         let mut builder = TlsConnector::builder();
@@ -377,11 +378,14 @@ impl VpnTunnel for SslTunnel {
             .configure_device(&device_config)
             .await?;
 
-        let dev = tun.inner();
-        let tun_sender = dev.clone();
-        let tun_receiver = dev.clone();
-
-        self.tun_device = Some(tun);
+        // On Android the VpnService fd only exists once routes/DNS are declared; see imp/tun.rs.
+        #[cfg(not(target_os = "android"))]
+        let (tun_sender, tun_receiver) = {
+            let dev = tun.inner();
+            let pair = (dev.clone(), dev.clone());
+            self.tun_device = Some(tun);
+            pair
+        };
 
         let resolver_config = self.make_resolver_config().await;
 
@@ -389,6 +393,14 @@ impl VpnTunnel for SslTunnel {
         if !self.params.no_dns {
             self.setup_dns(&resolver_config, &tun_name, false).await?;
         }
+
+        #[cfg(target_os = "android")]
+        let (tun_sender, tun_receiver) = {
+            let dev = tun.inner();
+            let pair = (dev.clone(), dev.clone());
+            self.tun_device = Some(tun);
+            pair
+        };
 
         let mut snx_receiver = self.receiver.take().unwrap();
 

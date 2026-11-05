@@ -35,7 +35,7 @@ class VpnClientService : VpnService() {
 
         const val ACTION_CONNECT = "net.pankratov.snxrs.CONNECT"
         const val ACTION_DISCONNECT = "net.pankratov.snxrs.DISCONNECT"
-        const val EXTRA_CONFIG_JSON = "config_json"
+        const val EXTRA_CONFIG = "config"
 
         init {
             System.loadLibrary("snxrs")
@@ -46,7 +46,8 @@ class VpnClientService : VpnService() {
     private var worker: Thread? = null
 
     // Implemented in apps/snxrs-android (Java_net_pankratov_snxrs_VpnClientService_*).
-    private external fun nativeConnect(configJson: String): String
+    /** Profile in snx-rs config-file format; returns "" on a clean stop, else the error. */
+    private external fun nativeConnect(config: String): String
     private external fun nativeDisconnect()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -56,11 +57,11 @@ class VpnClientService : VpnService() {
                     Log.w(TAG, "Connect ignored: a connection attempt is already running")
                     return START_STICKY
                 }
-                val configJson = intent.getStringExtra(EXTRA_CONFIG_JSON) ?: "{}"
+                val config = intent.getStringExtra(EXTRA_CONFIG) ?: ""
                 ConnectionState.update(getString(R.string.state_connecting))
                 startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.state_connecting)))
                 worker = Thread {
-                    val error = nativeConnect(configJson)
+                    val error = nativeConnect(config)
                     Log.i(TAG, "nativeConnect finished: ${error.ifEmpty { "ok" }}")
                     ConnectionState.update(
                         if (error.isEmpty()) getString(R.string.state_disconnected)
