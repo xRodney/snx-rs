@@ -106,11 +106,24 @@ for the keepalive. It should go upstream as a small PR, after which the vendored
 
 Done: cdylib + JNI handle, runner (password and identity-provider/SSO login), VpnService with
 foreground notification and consent, protect() for ESP/TCPT/SSL sockets, keepalive through the tunnel,
-connection profiles with the desktop option set, CI build.
+connection profiles with the desktop option set, CI build, network monitoring and automatic reconnect.
+
+## Network changes
+
+`NetworkMonitor.kt` follows the non-VPN networks (the app's own default network is its VPN) and picks
+the one Android prefers: validated, then non-cellular. It reports to Rust through two JNI calls:
+`nativeSetOnline` feeds `NetworkInterface::is_online()`, which pauses keepalive and rekey while
+offline, and `nativeNetworkChanged` (debounced) terminates the running tunnel. The service also passes
+the network to `setUnderlyingNetworks`.
+
+`runner.rs` treats any loss of a tunnel that had connected as recoverable: it waits for connectivity,
+backs off, and runs the login again, first trying `restore_session()` when `ike-persist` is set. A
+failure before the first connection is reported as before. A user disconnect deletes the saved IKE
+sessions (`SessionStore::delete_all`).
 
 Open:
 - Interactive MFA prompts (typed codes) and the Mobile Access portal.
-- Network change monitoring via `ConnectivityManager.NetworkCallback` (reconnect after Wi-Fi/mobile
-  switches).
+- Keep the VPN interface across reconnects (re-`establish()` instead of closing the fd) so traffic does
+  not briefly bypass the tunnel and apps do not see the VPN go down.
 - Split DNS: Android has no supplemental-domain primitive; search domains apply globally.
 - Device testing of certificate login, the SSL tunnel and IKEv2.

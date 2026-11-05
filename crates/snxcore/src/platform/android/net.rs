@@ -4,12 +4,22 @@
 //! config so [`super::tun_fd`] can fold it into the `VpnService.Builder` call. Likewise the online
 //! check and default-IP lookup defer to the OS rather than reading netlink.
 
-use std::net::Ipv4Addr;
+use std::{
+    net::Ipv4Addr,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use ipnet::Ipv4Net;
 
 use super::{staging, stats::AndroidStatsPoller};
 use crate::platform::{DeviceConfig, NetworkInterface, StatsPoller};
+
+static ONLINE: AtomicBool = AtomicBool::new(true);
+
+/// Fed by the service's `ConnectivityManager.NetworkCallback`.
+pub fn set_online(online: bool) {
+    ONLINE.store(online, Ordering::SeqCst);
+}
 
 #[derive(Default)]
 pub struct AndroidNetworkInterface;
@@ -22,8 +32,7 @@ impl AndroidNetworkInterface {
 
 impl NetworkInterface for AndroidNetworkInterface {
     async fn start_network_state_monitoring(&self) -> anyhow::Result<()> {
-        // Real impl: register a ConnectivityManager.NetworkCallback on the Java side. Not needed for
-        // the skeleton; is_online() assumes connectivity.
+        // The service registers its NetworkCallback before connecting and reports through set_online.
         Ok(())
     }
 
@@ -64,6 +73,6 @@ impl NetworkInterface for AndroidNetworkInterface {
     }
 
     fn is_online(&self) -> bool {
-        true
+        ONLINE.load(Ordering::SeqCst)
     }
 }

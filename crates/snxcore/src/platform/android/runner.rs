@@ -2,47 +2,228 @@
 //! any interactive prompts: the password and any MFA code come from [`TunnelParams`], and
 //! identity-provider (SSO) login opens the browser through the VpnService. Other interactive factors
 //! are rejected for now.
+//!
+//! Once the tunnel has been up, losing it (keepalive failure, or the service reporting a switch of
+//! the underlying network) is not fatal: the runner waits for connectivity and reconnects, resuming
+//! the saved IKE session when `ike-persist` is on so that no new sign-in is needed.
 
-use std::sync::Arc;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::bail;
 use secrecy::ExposeSecret;
-use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tokio::sync::{Notify, mpsc};
+use tracing::{debug, info, warn};
 
 use crate::{
     model::{MfaType, SessionState, params::TunnelParams},
     otp::OtpListener,
     platform::{NetworkInterface, Platform, PlatformAccess},
-    tunnel::{TunnelCommand, TunnelConnectorFactory, TunnelEvent, connector::CheckPointConnectorFactory},
+    tunnel::{
+        TunnelCommand, TunnelConnector, TunnelConnectorFactory, TunnelEvent, connector::CheckPointConnectorFactory,
+        ipsec::SessionStore,
+    },
 };
 
-/// Authenticate and run the tunnel until a `Terminate` command or a fatal error. The caller owns both
-/// ends of the command channel: `command_sender` is handed to the tunnel (and kept for rekey), while
-/// `command_receiver` is what `Terminate` is delivered on from `nativeDisconnect`.
-///
-/// `cancel` aborts the authentication phase (e.g. a pending SSO sign-in) when notified; once the tunnel
-/// runs, `Terminate` on the command channel is the way to stop it.
-pub async fn run_tunnel(
-    params: Arc<TunnelParams>,
-    command_sender: mpsc::Sender<TunnelCommand>,
-    command_receiver: mpsc::Receiver<TunnelCommand>,
-    cancel: Arc<tokio::sync::Notify>,
-) -> anyhow::Result<()> {
+const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+struct Control {
+    running: AtomicBool,
+    stop: AtomicBool,
+    commands: Mutex<Option<mpsc::Sender<TunnelCommand>>>,
+    wake: Notify,
+}
+
+fn control() -> &'static Control {
+    static CONTROL: std::sync::OnceLock<Control> = std::sync::OnceLock::new();
+    CONTROL.get_or_init(Control::default)
+}
+
+impl Control {
+    fn stopped(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+
+    fn send(&self, command: TunnelCommand) {
+        if let Some(tx) = self.commands.lock().unwrap().as_ref() {
+            let _ = tx.try_send(command);
+        }
+    }
+
+    /// Returns when `ready()` holds, the stop flag is set, or `timeout` elapses (if given).
+    async fn wait_until(&self, ready: impl Fn() -> bool, timeout: Option<Duration>) {
+        let deadline = timeout.map(|t| tokio::time::Instant::now() + t);
+        loop {
+            let notified = self.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if ready() || self.stopped() {
+                return;
+            }
+            match deadline {
+                Some(deadline) => {
+                    if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                        return;
+                    }
+                }
+                None => notified.await,
+            }
+        }
+    }
+}
+
+/// User-initiated disconnect: cancels a pending sign-in or reconnect wait, stops the tunnel and
+/// forgets the saved IKE session.
+pub fn request_stop() {
+    let ctl = control();
+    ctl.stop.store(true, Ordering::SeqCst);
+    ctl.wake.notify_waiters();
+    ctl.send(TunnelCommand::Terminate(true));
+}
+
+/// The underlying network changed: drop the tunnel so the runner rebuilds it over the new network.
+pub fn network_changed() {
+    let ctl = control();
+    info!("Underlying network changed, restarting the tunnel");
+    ctl.send(TunnelCommand::Terminate(false));
+    ctl.wake.notify_waiters();
+}
+
+pub fn set_online(online: bool) {
+    super::net::set_online(online);
+    if online {
+        control().wake.notify_waiters();
+    }
+}
+
+fn is_online() -> bool {
+    Platform::get().new_network_interface().is_online()
+}
+
+/// Authenticate and run the tunnel until [`request_stop`], reconnecting after the tunnel is lost.
+/// Fails without retrying if the first connection attempt fails.
+pub async fn run_tunnel(params: Arc<TunnelParams>) -> anyhow::Result<()> {
+    let ctl = control();
+    if ctl.running.swap(true, Ordering::SeqCst) {
+        bail!("A connection is already in progress; disconnect first");
+    }
+    ctl.stop.store(false, Ordering::SeqCst);
     isakmp::transport::set_socket_hook(Some(Arc::new(super::jni_bridge::protect_socket)));
-    let result = run(params, command_sender, command_receiver, cancel).await;
+
+    let result = run_with_reconnect(params.clone()).await;
+
+    if ctl.stopped()
+        && params.ike_persist
+        && let Err(e) = SessionStore::delete_all(params.profile_id, &params.server_name)
+    {
+        warn!("Cannot delete the saved IKE session: {e}");
+    }
     isakmp::transport::set_socket_hook(None);
+    ctl.running.store(false, Ordering::SeqCst);
     result
 }
 
-async fn run(
-    params: Arc<TunnelParams>,
-    command_sender: mpsc::Sender<TunnelCommand>,
-    command_receiver: mpsc::Receiver<TunnelCommand>,
-    cancel: Arc<tokio::sync::Notify>,
-) -> anyhow::Result<()> {
+async fn run_with_reconnect(params: Arc<TunnelParams>) -> anyhow::Result<()> {
+    let ctl = control();
+    let mut ever_connected = false;
+    let mut attempt = 0;
+
+    loop {
+        let connected = Arc::new(AtomicBool::new(false));
+        let result = run_once(params.clone(), connected.clone()).await;
+        *ctl.commands.lock().unwrap() = None;
+
+        if ctl.stopped() {
+            return Ok(());
+        }
+        if connected.load(Ordering::SeqCst) {
+            ever_connected = true;
+            attempt = 0;
+        }
+        if !ever_connected {
+            return result;
+        }
+
+        attempt += 1;
+        if attempt > MAX_RECONNECT_ATTEMPTS {
+            return result;
+        }
+        match &result {
+            Ok(()) => info!("Tunnel stopped, reconnecting"),
+            Err(e) => warn!("Tunnel lost: {e:#}; reconnecting (attempt {attempt})"),
+        }
+        let _ = super::jni_bridge::reconnecting();
+
+        ctl.wait_until(is_online, None).await;
+        if attempt > 1 {
+            let delay = Duration::from_secs(1 << (attempt - 1).min(5)).min(MAX_RECONNECT_DELAY);
+            ctl.wait_until(|| false, Some(delay)).await;
+        }
+        if ctl.stopped() {
+            return Ok(());
+        }
+    }
+}
+
+async fn run_once(params: Arc<TunnelParams>, connected: Arc<AtomicBool>) -> anyhow::Result<()> {
     let factory = CheckPointConnectorFactory::default();
 
+    let (mut connector, session) = tokio::select! {
+        result = login(&factory, params.clone()) => result?,
+        () = control().wait_until(|| false, None) => bail!("Connection cancelled"),
+    };
+
+    let (command_sender, command_receiver) = mpsc::channel(16);
+    let mut tunnel = connector.create_tunnel(session, command_sender.clone()).await?;
+    *control().commands.lock().unwrap() = Some(command_sender);
+    if control().stopped() {
+        return Ok(());
+    }
+
+    if let Err(e) = Platform::get()
+        .new_network_interface()
+        .start_network_state_monitoring()
+        .await
+    {
+        warn!("Unable to start network monitoring: {e}");
+    }
+
+    let (event_sender, mut event_receiver) = mpsc::channel::<TunnelEvent>(16);
+
+    let events = tokio::spawn(async move {
+        while let Some(event) = event_receiver.recv().await {
+            let _ = connector
+                .handle_tunnel_event(event.clone())
+                .await
+                .inspect_err(|e| warn!("{e}"));
+            match event {
+                TunnelEvent::Connected(_) => {
+                    debug!("Android tunnel connected");
+                    connected.store(true, Ordering::SeqCst);
+                }
+                TunnelEvent::Disconnected => break,
+                _ => {}
+            }
+        }
+    });
+
+    let result = tunnel.run(command_receiver, event_sender).await;
+    debug!("Android tunnel stopped");
+    let _ = events.await;
+    result
+}
+
+async fn login(
+    factory: &CheckPointConnectorFactory,
+    params: Arc<TunnelParams>,
+) -> anyhow::Result<(Box<dyn TunnelConnector + Send + Sync>, Arc<crate::model::TunnelSession>)> {
     let gateway = factory.new_gateway_connector(params.clone());
     let info = gateway.get_gateway_information().await?;
     if !info.is_supported_login_type(&params.login_type) {
@@ -50,6 +231,17 @@ async fn run(
     }
 
     let mut connector = factory.new_tunnel_connector(params.clone()).await?;
+
+    if params.ike_persist {
+        match connector.restore_session().await {
+            Ok(session) => {
+                info!("Resumed the saved IKE session");
+                return Ok((connector, session));
+            }
+            Err(e) => debug!("No saved IKE session to resume: {e}"),
+        }
+    }
+
     let mut session = connector.authenticate().await?;
 
     let mut mfa_index = 0;
@@ -68,48 +260,17 @@ async fn run(
             }
             MfaType::IdentityProvider => {
                 // Same flow as the desktop: the gateway's SSO page hands the OTP to a listener on
-                // 127.0.0.1:7779, which the phone's browser reaches since it shares the loopback.
+                // 127.0.0.1:7779, which the in-app WebView reaches since it shares the loopback.
                 let listener = OtpListener::new().await?;
                 super::jni_bridge::open_url(&challenge.prompt)?;
-                let otp = tokio::select! {
-                    otp = listener.acquire_otp() => otp?,
-                    () = cancel.notified() => bail!("Sign-in cancelled"),
-                };
+                let otp = listener.acquire_otp().await?;
                 session = connector.challenge_code(session, &otp).await?;
             }
             other => bail!("Unsupported authentication factor on Android: {other:?}"),
         }
     }
 
-    let mut tunnel = connector.create_tunnel(session, command_sender).await?;
-
-    if let Err(e) = Platform::get()
-        .new_network_interface()
-        .start_network_state_monitoring()
-        .await
-    {
-        warn!("Unable to start network monitoring: {e}");
-    }
-
-    let (event_sender, mut event_receiver) = mpsc::channel::<TunnelEvent>(16);
-
-    tokio::spawn(async move {
-        while let Some(event) = event_receiver.recv().await {
-            let _ = connector
-                .handle_tunnel_event(event.clone())
-                .await
-                .inspect_err(|e| warn!("{e}"));
-            match event {
-                TunnelEvent::Connected(_) => debug!("Android tunnel connected"),
-                TunnelEvent::Disconnected => break,
-                _ => {}
-            }
-        }
-    });
-
-    tunnel.run(command_receiver, event_sender).await?;
-    debug!("Android tunnel stopped");
-    Ok(())
+    Ok((connector, session))
 }
 
 /// A login type offered by the gateway, as `snx-rs -m info` lists it.

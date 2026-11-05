@@ -25,6 +25,7 @@
     <string name="state_connecting">Connecting…</string>
     <string name="state_signin">Waiting for sign-in…</string>
     <string name="state_connected">Connected</string>
+    <string name="state_reconnecting">Reconnecting…</string>
     <string name="state_disconnected">Disconnected</string>
     <string name="state_failed">Disconnected: %1$s</string>
 

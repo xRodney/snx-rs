@@ -4,32 +4,26 @@
 //! `VpnClientService` binds, a concrete [`VpnServiceHandle`](snxcore::platform::android::jni_bridge::VpnServiceHandle)
 //! that calls back into the service, and a tokio runtime that drives the tunnel. On any other target
 //! the crate is empty.
-//!
-//! NOTE: this file can only be compiled for an Android target (it depends on `snxcore::platform::android`,
-//! which is `cfg(target_os = "android")`), so it has not been compiled in the dev container that lacks
-//! the NDK. Expect to iterate on the `jni` 0.21 calls when first building with cargo-ndk.
 
 #![allow(unsafe_code)]
 
 #[cfg(target_os = "android")]
 mod android {
-    use std::{
-        os::fd::RawFd,
-        sync::{Mutex, OnceLock},
-    };
+    use std::{os::fd::RawFd, path::PathBuf, sync::OnceLock};
 
     use jni::{
         JNIEnv, JavaVM,
         objects::{GlobalRef, JObject, JString, JValue},
-        sys::jstring,
+        sys::{jboolean, jstring},
     };
     use serde::Serialize;
     use snxcore::{
         model::params::TunnelParams,
-        platform::android::jni_bridge::{self, TunBuilderConfig, VpnServiceHandle},
-        tunnel::TunnelCommand,
+        platform::android::{
+            self,
+            jni_bridge::{self, TunBuilderConfig, VpnServiceHandle},
+        },
     };
-    use tokio::sync::mpsc;
     use tracing::{error, info};
 
     /// What `establishTun` receives as JSON on the Java side.
@@ -51,16 +45,6 @@ mod android {
                 .build()
                 .expect("failed to build tokio runtime")
         })
-    }
-
-    fn cancel() -> &'static std::sync::Arc<tokio::sync::Notify> {
-        static CANCEL: OnceLock<std::sync::Arc<tokio::sync::Notify>> = OnceLock::new();
-        CANCEL.get_or_init(Default::default)
-    }
-
-    fn command_tx() -> &'static Mutex<Option<mpsc::Sender<TunnelCommand>>> {
-        static TX: OnceLock<Mutex<Option<mpsc::Sender<TunnelCommand>>>> = OnceLock::new();
-        TX.get_or_init(|| Mutex::new(None))
     }
 
     struct AndroidVpnServiceHandle {
@@ -160,6 +144,12 @@ mod android {
             Ok(())
         }
 
+        fn reconnecting(&self) -> anyhow::Result<()> {
+            let mut env = self.vm.attach_current_thread()?;
+            env.call_method(&self.service, "onReconnecting", "()V", &[])?;
+            Ok(())
+        }
+
         fn keystore_delete(&self, key: &str) -> anyhow::Result<()> {
             let mut env = self.vm.attach_current_thread()?;
             let jkey = env.new_string(key)?;
@@ -192,26 +182,18 @@ mod android {
         });
     }
 
-    fn connect(env: &mut JNIEnv, service: &JObject, config: JString) -> anyhow::Result<()> {
+    fn connect(env: &mut JNIEnv, service: &JObject, config: JString, files_dir: JString) -> anyhow::Result<()> {
+        let files_dir: String = env.get_string(&files_dir)?.into();
+        android::set_data_dir(PathBuf::from(files_dir));
         let params = std::sync::Arc::new(parse_profile(env, &config)?);
-
-        let (tx, rx) = mpsc::channel(16);
-        {
-            let mut slot = command_tx().lock().unwrap();
-            if slot.is_some() {
-                anyhow::bail!("A connection is already in progress; disconnect first");
-            }
-            *slot = Some(tx.clone());
-        }
 
         let vm = env.get_java_vm()?;
         let service = env.new_global_ref(service)?;
         jni_bridge::set_handle(Box::new(AndroidVpnServiceHandle { vm, service }));
 
         // Blocks this (dedicated Java) thread until the tunnel stops.
-        let result = runtime().block_on(snxcore::platform::android::run_tunnel(params, tx, rx, cancel().clone()));
+        let result = runtime().block_on(android::run_tunnel(params));
 
-        *command_tx().lock().unwrap() = None;
         jni_bridge::clear_handle();
         result
     }
@@ -255,16 +237,18 @@ mod android {
             .unwrap_or(std::ptr::null_mut())
     }
 
-    /// Instance method `private external fun nativeConnect(config: String): String` — the second JNI
-    /// argument is the `VpnClientService` receiver (`this`). Returns "" on a clean stop, else the error.
+    /// Instance method `private external fun nativeConnect(config: String, filesDir: String): String` —
+    /// the second JNI argument is the `VpnClientService` receiver (`this`). Blocks across reconnects;
+    /// returns "" on a clean stop, else the error.
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeConnect(
         mut env: JNIEnv,
         service: JObject,
         config: JString,
+        files_dir: JString,
     ) -> jstring {
         init_logging();
-        let message = match connect(&mut env, &service, config) {
+        let message = match connect(&mut env, &service, config, files_dir) {
             Ok(()) => String::new(),
             Err(e) => {
                 error!("Connection failed: {e:#}");
@@ -280,10 +264,25 @@ mod android {
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeDisconnect(_env: JNIEnv, _service: JObject) {
         info!("Disconnect requested");
-        cancel().notify_waiters();
-        let tx = command_tx().lock().unwrap().clone();
-        if let Some(tx) = tx {
-            let _ = tx.blocking_send(TunnelCommand::Terminate(true));
-        }
+        android::request_stop();
+    }
+
+    /// Instance method `private external fun nativeSetOnline(online: Boolean)`.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeSetOnline(
+        _env: JNIEnv,
+        _service: JObject,
+        online: jboolean,
+    ) {
+        android::set_online(online != 0);
+    }
+
+    /// Instance method `private external fun nativeNetworkChanged()`.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_net_pankratov_snxrs_VpnClientService_nativeNetworkChanged(
+        _env: JNIEnv,
+        _service: JObject,
+    ) {
+        android::network_changed();
     }
 }

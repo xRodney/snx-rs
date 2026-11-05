@@ -64,6 +64,13 @@ pick one. Username/password are hidden for identity-provider (SSO) login types: 
 the sign-in page inside the app. CA and client certificate files are picked with the system file picker
 and copied into app-private storage.
 
+If the tunnel drops after it was up — the keepalive fails, or the phone moves between Wi-Fi and mobile
+data — the app reconnects by itself: it waits until a network is available and retries with back-off
+(up to 10 attempts). With **Persist IKE session** on, the reconnect resumes the saved IKE session, so
+SSO profiles do not ask to sign in again; without it, the sign-in page opens again. The VPN interface
+is rebuilt on every reconnect, so open TCP connections through the tunnel are reset. **Disconnect**
+forgets the saved session.
+
 Not offered on Android: kernel transport, PKCS#11 tokens, split DNS / routing domains, IP forwarding,
 keychain, themes and notification level.
 

@@ -30,6 +30,9 @@ const SESSIONS_NAME: &str = "ike-sessions.db";
 /// The two IKE versions keep their own tables: the blobs are each version's
 /// own format, and a profile that switches between them must not be handed the
 /// other's bytes.
+pub(crate) const IKEV1_SESSION_TABLE: &str = "ike_session";
+pub(crate) const IKEV2_SESSION_TABLE: &str = "ikev2_session";
+
 pub(crate) struct SessionStore {
     table: &'static str,
     profile_id: Uuid,
@@ -115,6 +118,14 @@ impl SessionStore {
 
         debug!("Deleted IKE session: {}: {}", self.server_name, self.profile_id);
 
+        Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn delete_all(profile_id: Uuid, server_name: &str) -> anyhow::Result<()> {
+        for table in [IKEV1_SESSION_TABLE, IKEV2_SESSION_TABLE] {
+            Self::new(table, profile_id, server_name.to_owned()).delete()?;
+        }
         Ok(())
     }
 }

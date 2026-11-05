@@ -58,6 +58,9 @@ pub trait VpnServiceHandle: Send + Sync {
 
     /// Opens `url` in the user's browser (identity-provider / SSO login).
     fn open_url(&self, url: &str) -> anyhow::Result<()>;
+
+    /// The tunnel dropped after having been up; the runner is about to reconnect.
+    fn reconnecting(&self) -> anyhow::Result<()>;
 }
 
 static HANDLE: OnceLock<Mutex<Option<Box<dyn VpnServiceHandle>>>> = OnceLock::new();
@@ -112,4 +115,8 @@ pub fn keystore_delete(key: &str) -> anyhow::Result<()> {
 
 pub fn open_url(url: &str) -> anyhow::Result<()> {
     with_handle(|h| h.open_url(url))
+}
+
+pub fn reconnecting() -> anyhow::Result<()> {
+    with_handle(|h| h.reconnecting())
 }

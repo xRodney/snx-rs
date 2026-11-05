@@ -12,6 +12,7 @@
 use std::{
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -39,7 +40,14 @@ pub mod staging;
 pub mod stats;
 pub mod tun_fd;
 
-pub use runner::{LoginTypeInfo, login_types, run_tunnel};
+pub use runner::{LoginTypeInfo, login_types, network_changed, request_stop, run_tunnel, set_online};
+
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// The app's `Context.getFilesDir()`; holds the IKE session store.
+pub fn set_data_dir(path: PathBuf) {
+    let _ = DATA_DIR.set(path);
+}
 
 // asm-generic/socket.h; the libc crate does not export it for Android targets.
 const SO_NO_CHECK: libc::c_int = 11;
@@ -153,9 +161,7 @@ impl PlatformAccess for AndroidPlatformAccess {
     }
 
     fn data_dir(&self) -> PathBuf {
-        // TODO: obtain Context.getFilesDir() through the bridge. Placeholder uses the conventional
-        // app-private path for the package id.
-        PathBuf::from("/data/data/net.pankratov.snxrs/files")
+        DATA_DIR.get().cloned().unwrap_or_else(std::env::temp_dir)
     }
 
     async fn authorize_socket_peer(&self, _stream: &interprocess::local_socket::tokio::Stream) -> bool {

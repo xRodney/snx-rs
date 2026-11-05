@@ -45,11 +45,17 @@ class VpnClientService : VpnService() {
 
     private var tunInterface: ParcelFileDescriptor? = null
     private var worker: Thread? = null
+    private var networkMonitor: NetworkMonitor? = null
 
     // Implemented in apps/snxrs-android (Java_net_pankratov_snxrs_VpnClientService_*).
-    /** Profile in snx-rs config-file format; returns "" on a clean stop, else the error. */
-    private external fun nativeConnect(config: String): String
+    /**
+     * Profile in snx-rs config-file format. Blocks across automatic reconnects; returns "" on a
+     * clean stop, else the error.
+     */
+    private external fun nativeConnect(config: String, filesDir: String): String
     private external fun nativeDisconnect()
+    private external fun nativeSetOnline(online: Boolean)
+    private external fun nativeNetworkChanged()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -61,8 +67,9 @@ class VpnClientService : VpnService() {
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: ""
                 ConnectionState.update(getString(R.string.state_connecting))
                 startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.state_connecting)))
+                startNetworkMonitor()
                 worker = Thread {
-                    val error = nativeConnect(config)
+                    val error = nativeConnect(config, filesDir.absolutePath)
                     Log.i(TAG, "nativeConnect finished: ${error.ifEmpty { "ok" }}")
                     ConnectionState.update(
                         if (error.isEmpty()) getString(R.string.state_disconnected)
@@ -118,6 +125,22 @@ class VpnClientService : VpnService() {
     }
 
     fun protectSocket(fd: Int): Boolean = protect(fd)
+
+    /** Called from Rust when the tunnel dropped after having been up and is being re-established. */
+    fun onReconnecting() {
+        ConnectionState.update(getString(R.string.state_reconnecting))
+        updateNotification(getString(R.string.state_reconnecting))
+    }
+
+    private fun startNetworkMonitor() {
+        networkMonitor?.stop()
+        networkMonitor = NetworkMonitor(this) { network, switched ->
+            Log.i(TAG, "Underlying network: $network (switched: $switched)")
+            setUnderlyingNetworks(network?.let { arrayOf(it) })
+            nativeSetOnline(network != null)
+            if (switched) nativeNetworkChanged()
+        }.also { it.start() }
+    }
 
     /** Called from Rust for identity-provider (SSO) login: show the gateway's sign-in page in [SsoActivity]. */
     fun openUrl(url: String) {
@@ -182,8 +205,16 @@ class VpnClientService : VpnService() {
     }
 
     private fun cleanup() {
+        networkMonitor?.stop()
+        networkMonitor = null
+        nativeSetOnline(true)
         tunInterface?.close()
         tunInterface = null
+    }
+
+    override fun onRevoke() {
+        nativeDisconnect()
+        super.onRevoke()
     }
 
     override fun onDestroy() {
