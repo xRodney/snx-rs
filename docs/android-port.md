@@ -89,31 +89,28 @@ entry points behind `android-jni`). Kotlin side: `android/app/.../VpnClientServi
 | `staging.rs` | — | process-global staged config |
 | `jni_bridge.rs` | — | JNI boundary |
 
-## Build (the work beyond this skeleton)
+## Build
 
-- Add `apps/snxrs-android` with `crate-type = ["cdylib"]`, depending on `snxcore` with
-  `features = ["android-jni"]`, producing `libsnxrs.so`. snxcore stays an rlib.
-- Build with `cargo-ndk` for `arm64-v8a`, `armeabi-v7a`, `x86_64`.
-- **OpenSSL/NDK**: `reqwest`/`tokio-native-tls` pull OpenSSL; the `android` target deps set
-  `openssl/vendored`, which needs the NDK clang. **Strongly consider switching to rustls** — it drops
-  the C dependency, makes the build NDK-free for the crypto, and lets the Android code be
-  type-checked on a plain host (this container has no NDK, so the current target build stops at
-  `openssl-sys`).
-- Gradle module under `android/` to bundle the `.so`, host `VpnClientService`, add the VPN consent
-  flow (`VpnService.prepare`) and a connect/disconnect UI.
+See [android-build.md](android-build.md). The `apps/snxrs-android` cdylib produces `libsnxrs.so`; the
+Gradle project runs cargo-ndk for arm64-v8a, armeabi-v7a and x86_64. OpenSSL (TLS for the gateway HTTPS
+client and isakmp's crypto) is vendored for the Android target and compiles with the NDK toolchain.
 
-## Remaining gaps (checklist)
+## isakmp patch
 
-- [ ] `apps/snxrs-android` cdylib + `cargo-ndk` build
-- [ ] Concrete `AndroidVpnServiceHandle` (jni crate): cache `JavaVM` + `GlobalRef`, implement
-      `establish_tun` / `protect_socket` / `android_id` / `keystore_*`
-- [ ] `nativeConnect`/`nativeDisconnect` bodies: parse `TunnelParams`, run `controller` on a tokio
-      runtime, force `TunnelType::IPsec`
-- [ ] `protect_socket` for the TCPT transport and the SSL tunnel (udp.rs is wired; others TODO)
-- [ ] EncryptedSharedPreferences in `SecurePrefs`
-- [ ] Foreground-service notification + VPN consent
-- [ ] Real DNS/online monitoring via `ConnectivityManager.NetworkCallback`
-- [ ] Split DNS: Android has no supplemental-domain primitive; decide per-app DNS vs. full
-- [ ] Browser/SSO auth (`browser.rs`) → Custom Tabs + deep-link redirect, if IdP login is needed
-- [ ] UI (profiles, MFA challenge prompt)
-- [ ] Consider rustls to drop OpenSSL/NDK (also enables host type-checking of the Android code)
+`crates/isakmp` is upstream isakmp (rev `ce07353`) vendored with one local change, marked
+`SNX-RS ANDROID PATCH`: a socket hook on outgoing TCPT connections so the Android runner can
+`VpnService.protect()` the IKE channel. It is needed because the gateway's /32 is routed into the VPN
+for the keepalive. It should go upstream as a small PR, after which the vendored copy can be dropped.
+
+## Status
+
+Done: cdylib + JNI handle, runner (password and identity-provider/SSO login), VpnService with
+foreground notification and consent, protect() for ESP/TCPT/SSL sockets, keepalive through the tunnel,
+connection profiles with the desktop option set, CI build.
+
+Open:
+- Interactive MFA prompts (typed codes) and the Mobile Access portal.
+- Network change monitoring via `ConnectivityManager.NetworkCallback` (reconnect after Wi-Fi/mobile
+  switches).
+- Split DNS: Android has no supplemental-domain primitive; search domains apply globally.
+- Device testing of certificate login, the SSL tunnel and IKEv2.

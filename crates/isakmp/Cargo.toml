@@ -4,8 +4,8 @@ version = "0.2.0"
 edition = "2024"
 authors = ["Dmitry Pankratov <dmitry@pankratov.net>"]
 license = "AGPL-3.0"
-# Vendored from https://github.com/ancwrd1/isakmp.git (rev ce07353) to allow the OpenSSL -> RustCrypto
-# migration needed for the Android (NDK-free) build. See docs/android-port.md.
+# Vendored from https://github.com/ancwrd1/isakmp.git (rev ce07353). The ONLY local change is the
+# "SNX-RS ANDROID PATCH" socket hook in src/transport.rs + src/transport/tcpt.rs (grep for that marker).
 repository = "https://github.com/ancwrd1/isakmp"
 
 [dependencies]
@@ -18,29 +18,11 @@ hex = "0.4"
 tokio = { version = "1", features = ["time", "net", "sync", "rt", "io-util" ] }
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
+openssl = "0.10"
 async-trait = "0.1"
 tracing = "0.1"
 itertools = "0.15"
 cryptoki = "0.12"
-# RustCrypto stack replacing OpenSSL (migration in progress; see docs/deopenssl-plan.md).
-digest = "0.10"
-md-5 = { version = "0.10", features = ["oid"] }
-sha1 = { version = "0.10", features = ["oid"] }
-sha2 = { version = "0.10", features = ["oid"] }
-hmac = "0.12"
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
-des = "0.8"
-aes-gcm = "0.10"
-num-bigint = "0.4"
-num-traits = "0.2"
-p256 = { version = "0.13", features = ["ecdh"] }
-p384 = { version = "0.13", features = ["ecdh"] }
-p521 = { version = "0.13", features = ["ecdh"] }
-rsa = { version = "0.9", features = ["sha1", "sha2", "pem"] }
-x509-parser = "0.18"
-subtle = "2"
-rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["rc", "derive"] }
 rmp-serde = "1"
 pnet_packet = "0.35"
@@ -48,15 +30,11 @@ pnet_macros = "0.35"
 pnet_macros_support = "0.35"
 ipnet = "2"
 secrecy = "0.10"
-p12-keystore = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
-# Test-only: self-signed cert generation + signature verification in the ikev2 session/service tests
-# still use OpenSSL. These are not compiled into the library or the Android target.
-openssl = "0.10"
 socket2 = "0.6"
 opener = "0.9"
 secrecy = "0.10"

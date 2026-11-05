@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::Context;
 use bytes::{BufMut, Bytes, BytesMut};
+use openssl::sha::sha1;
 use rand::random;
 use tracing::{debug, trace, warn};
 
@@ -80,10 +81,7 @@ fn nat_detection_hash(initiator_spi: u64, responder_spi: u64, endpoint: SocketAd
     buf.put_slice(&endpoint.ip().octets());
     buf.put_u16(endpoint.port());
 
-    Bytes::copy_from_slice(&crate::crypto::hash_chunks(
-        crate::crypto::DigestType::Sha1,
-        [buf.as_ref()],
-    ))
+    Bytes::copy_from_slice(&sha1(&buf))
 }
 
 /// What IKE_SA_INIT settled, beyond the key schedule the session now holds.

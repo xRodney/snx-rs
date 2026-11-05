@@ -10,6 +10,11 @@ use std::{
 
 use anyhow::Context;
 use bytes::Bytes;
+use openssl::{
+    pkey::PKey,
+    sign::Signer,
+    symm::{Cipher, Crypter, Mode},
+};
 use pnet_macros::Packet;
 use pnet_macros_support::types::u32be;
 use pnet_packet::{
@@ -20,7 +25,7 @@ use pnet_packet::{
 };
 use tokio::time::Instant;
 
-use crate::{crypto::CipherType, model::EspCryptMaterial};
+use crate::model::EspCryptMaterial;
 
 #[derive(Packet)]
 #[allow(unused)]
@@ -31,20 +36,20 @@ pub struct Esp {
     payload: Vec<u8>,
 }
 
-/// Validates a CBC + HMAC SA, which carries its integrity key separately.
-fn cbc_cipher(params: &EspCryptMaterial) -> anyhow::Result<CipherType> {
+/// Cipher for a CBC + HMAC SA, which carries its integrity key separately.
+fn cbc_cipher(params: &EspCryptMaterial) -> anyhow::Result<Cipher> {
     if params.cipher.is_aead() {
         anyhow::bail!("{:?} is an AEAD cipher, not a CBC one", params.cipher);
     }
     check_key_len(params)?;
 
-    Ok(params.cipher)
+    Ok(params.cipher.into())
 }
 
 /// Cipher, key and salt for an AEAD SA. RFC 4106 §3 draws four octets of keying
 /// material beyond the key proper: the salt, which never appears on the wire
 /// and prefixes the explicit IV to form the nonce.
-fn aead_cipher(params: &EspCryptMaterial) -> anyhow::Result<(CipherType, &[u8], &[u8])> {
+fn aead_cipher(params: &EspCryptMaterial) -> anyhow::Result<(Cipher, &[u8], &[u8])> {
     if !params.cipher.is_aead() {
         anyhow::bail!("{:?} is not an AEAD cipher", params.cipher);
     }
@@ -52,7 +57,7 @@ fn aead_cipher(params: &EspCryptMaterial) -> anyhow::Result<(CipherType, &[u8], 
 
     let (key, salt) = params.sk_e.split_at(params.cipher.key_len());
 
-    Ok((params.cipher, key, salt))
+    Ok((params.cipher.into(), key, salt))
 }
 
 fn check_key_len(params: &EspCryptMaterial) -> anyhow::Result<()> {
@@ -310,14 +315,23 @@ impl EspCodec {
     fn encrypt(&self, params: &EspCryptMaterial, data: &[u8]) -> anyhow::Result<Vec<u8>> {
         let cipher = cbc_cipher(params)?;
 
-        let mut iv = vec![0u8; cipher.iv_len()];
+        let mut iv = vec![0u8; cipher.iv_len().unwrap_or_default()];
         rand::fill(&mut iv[..]);
+        let iv = &iv[..];
 
-        let plain = add_trailer(data, cipher.block_size());
-        let ciphertext = crate::crypto::cbc_encrypt(cipher, &params.sk_e, &plain, &iv)?;
+        let plain = add_trailer(data, params.cipher.block_size());
 
-        let mut out = iv;
-        out.extend_from_slice(&ciphertext);
+        let mut out = vec![0u8; iv.len() + plain.len() + cipher.block_size()];
+
+        out[0..iv.len()].copy_from_slice(iv);
+
+        let mut crypter = Crypter::new(cipher, Mode::Encrypt, &params.sk_e, Some(iv))?;
+        crypter.pad(false);
+
+        let mut count = crypter.update(&plain, &mut out[iv.len()..])?;
+        count += crypter.finalize(&mut out[iv.len() + count..])?;
+
+        out.truncate(count + iv.len());
         Ok(out)
     }
 
@@ -332,36 +346,69 @@ impl EspCodec {
         let iv = (seq as u64).to_be_bytes();
         let nonce = [salt, &iv[..]].concat();
 
-        let plain = add_trailer(data, cipher.block_size());
-        let ciphertext = crate::crypto::gcm_encrypt(cipher, key, &plain, &nonce, aad)?;
+        let plain = add_trailer(data, params.cipher.block_size());
 
-        let mut out = Vec::with_capacity(iv.len() + ciphertext.len());
-        out.extend_from_slice(&iv);
-        out.extend_from_slice(&ciphertext);
+        let mut crypter = Crypter::new(cipher, Mode::Encrypt, key, Some(&nonce))?;
+        crypter.pad(false);
+        crypter.aad_update(aad)?;
+
+        let mut out = vec![0u8; iv.len() + plain.len() + cipher.block_size()];
+        out[0..iv.len()].copy_from_slice(&iv);
+
+        let mut count = crypter.update(&plain, &mut out[iv.len()..])?;
+        count += crypter.finalize(&mut out[iv.len() + count..])?;
+
+        out.truncate(count + iv.len());
+
+        let mut icv = vec![0u8; params.cipher.icv_len()];
+        crypter.get_tag(&mut icv)?;
+        out.extend(icv);
+
         Ok(out)
     }
 
     fn decrypt_aead(&self, params: &EspCryptMaterial, data: &[u8], aad: &[u8]) -> anyhow::Result<Vec<u8>> {
         let (cipher, key, salt) = aead_cipher(params)?;
 
-        let iv_len = cipher.iv_len();
-        let icv_len = cipher.icv_len();
+        let iv_len = params.cipher.iv_len();
+        let icv_len = params.cipher.icv_len();
 
         if data.len() < iv_len + icv_len {
             anyhow::bail!("ESP payload shorter than IV and ICV");
         }
 
-        let (iv, ciphertext_and_icv) = data.split_at(iv_len);
+        let (data, icv) = data.split_at(data.len() - icv_len);
+        let (iv, ciphertext) = data.split_at(iv_len);
         let nonce = [salt, iv].concat();
 
-        let plain = crate::crypto::gcm_decrypt(cipher, key, ciphertext_and_icv, &nonce, aad)?;
-        strip_trailer(plain)
+        let mut crypter = Crypter::new(cipher, Mode::Decrypt, key, Some(&nonce))?;
+        crypter.pad(false);
+        crypter.aad_update(aad)?;
+
+        let mut out = vec![0u8; ciphertext.len() + cipher.block_size()];
+        let mut count = crypter.update(ciphertext, &mut out)?;
+
+        crypter.set_tag(icv)?;
+        count += crypter
+            .finalize(&mut out[count..])
+            .context("Invalid packet signature")?;
+
+        out.truncate(count);
+
+        strip_trailer(out)
     }
 
     fn authenticate(&self, params: &EspCryptMaterial, parts: &[&[u8]]) -> anyhow::Result<Vec<u8>> {
         let auth = params.auth.context("ESP SA has no integrity algorithm")?;
 
-        let mut hmac = crate::crypto::hmac_chunks(auth.digest, &params.sk_a, parts.iter().copied());
+        let key = PKey::hmac(&params.sk_a)?;
+        let mut signer = Signer::new(auth.digest.into(), &key)?;
+
+        for part in parts {
+            signer.update(part)?;
+        }
+
+        let mut hmac = signer.sign_to_vec()?;
         hmac.truncate(auth.icv_len);
 
         Ok(hmac)
@@ -370,7 +417,7 @@ impl EspCodec {
     fn verify(&self, params: &EspCryptMaterial, parts: &[&[u8]], auth: &[u8]) -> anyhow::Result<()> {
         let hmac = self.authenticate(params, parts)?;
 
-        if crate::crypto::ct_eq(&hmac, auth) {
+        if openssl::memcmp::eq(&hmac, auth) {
             Ok(())
         } else {
             Err(anyhow::anyhow!("Invalid packet signature"))
@@ -379,15 +426,24 @@ impl EspCodec {
 
     fn decrypt(&self, params: &EspCryptMaterial, data: &[u8]) -> anyhow::Result<Vec<u8>> {
         let cipher = cbc_cipher(params)?;
-        let iv_len = cipher.iv_len();
+        let iv_len = cipher.iv_len().unwrap_or_default();
 
         if data.len() < iv_len + cipher.block_size() {
             anyhow::bail!("ESP ciphertext too short");
         }
 
-        let (iv, ciphertext) = data.split_at(iv_len);
-        let plain = crate::crypto::cbc_decrypt(cipher, &params.sk_e, ciphertext, iv)?;
-        strip_trailer(plain)
+        let mut out = vec![0u8; data.len() - iv_len + cipher.block_size()];
+        let iv = &data[0..iv_len];
+
+        let mut crypter = Crypter::new(cipher, Mode::Decrypt, &params.sk_e, Some(iv))?;
+        crypter.pad(false);
+
+        let mut count = crypter.update(&data[iv_len..], &mut out)?;
+        count += crypter.finalize(&mut out[count..])?;
+
+        out.truncate(count);
+
+        strip_trailer(out)
     }
 }
 
@@ -495,9 +551,8 @@ mod tests {
     /// tag, whose length is one of the three ENCR_AES_GCM_* transforms.
     #[test]
     fn test_esp_gcm_codec_combinations() {
-        // IcvLength::Eight (ENCR_AES_GCM_8) is unsupported by the RustCrypto backend; see crypto.rs.
         let ciphers = iproduct!(
-            [IcvLength::Twelve, IcvLength::Sixteen],
+            [IcvLength::Eight, IcvLength::Twelve, IcvLength::Sixteen],
             [
                 CipherType::Aes128Gcm as fn(IcvLength) -> CipherType,
                 CipherType::Aes192Gcm,

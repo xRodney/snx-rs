@@ -1,39 +1,21 @@
 use anyhow::{Context, anyhow};
 use bytes::{Bytes, BytesMut};
-use digest::DynDigest;
-use num_bigint::BigUint;
-use rsa::{RsaPublicKey, pkcs1v15::Pkcs1v15Sign};
+use openssl::{
+    bn::{BigNum, BigNumContext},
+    derive::Deriver,
+    dh::Dh,
+    ec::{EcGroup, EcKey, EcPoint, PointConversionForm},
+    hash::{Hasher, MessageDigest},
+    nid::Nid,
+    pkey::{PKey, Private},
+    rsa::Padding,
+    sign::{Signer, Verifier},
+    symm::{Cipher, Crypter, Mode},
+    x509::X509,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::ikev1::model::{IkeEncryptionAlgorithm, TransformId};
-
-/// Expand a GCM operation over the (key size, tag size) matrix. `$run` is a
-/// local macro, defined at the call site over the function's key/nonce/data/aad,
-/// taking an AES block type and a tag-size type and yielding a `Vec<u8>`.
-macro_rules! gcm_match {
-    ($cipher:expr, $run:ident) => {{
-        use aes_gcm::aead::consts::{U12, U16};
-        // The RustCrypto `aes-gcm` crate floors TagSize at 12 octets (short GCM tags are weak), so
-        // ENCR_AES_GCM_8 (IcvLength::Eight) is not expressible here and is rejected. It is a rarely
-        // negotiated transform; supporting it would need a manual GHASH. See docs/deopenssl-plan.md.
-        match $cipher {
-            CipherType::Aes128Gcm(IcvLength::Twelve) => $run!(aes::Aes128, U12),
-            CipherType::Aes128Gcm(IcvLength::Sixteen) => $run!(aes::Aes128, U16),
-            CipherType::Aes192Gcm(IcvLength::Twelve) => $run!(aes::Aes192, U12),
-            CipherType::Aes192Gcm(IcvLength::Sixteen) => $run!(aes::Aes192, U16),
-            CipherType::Aes256Gcm(IcvLength::Twelve) => $run!(aes::Aes256, U12),
-            CipherType::Aes256Gcm(IcvLength::Sixteen) => $run!(aes::Aes256, U16),
-            CipherType::Aes128Gcm(IcvLength::Eight)
-            | CipherType::Aes192Gcm(IcvLength::Eight)
-            | CipherType::Aes256Gcm(IcvLength::Eight) => {
-                return Err(anyhow!(
-                    "AES-GCM-8 (8-octet ICV) is not supported by the RustCrypto backend"
-                ));
-            }
-            other => return Err(anyhow!("Cipher {:?} is not an AEAD cipher", other)),
-        }
-    }};
-}
 
 // RFC2409: Oakley group 2
 const G2_P: &[u8] = &[
@@ -75,13 +57,7 @@ impl DigestType {
 
     /// Full (untruncated) output length in bytes.
     pub fn hash_len(&self) -> usize {
-        match self {
-            DigestType::Md5 => 16,
-            DigestType::Sha1 => 20,
-            DigestType::Sha256 => 32,
-            DigestType::Sha384 => 48,
-            DigestType::Sha512 => 64,
-        }
+        MessageDigest::from(*self).size()
     }
 
     /// Truncated checksum length used by the IKEv2 integrity transforms:
@@ -96,35 +72,15 @@ impl DigestType {
         }
     }
 
-    fn new_hasher(&self) -> Box<dyn DynDigest> {
-        match self {
-            DigestType::Md5 => Box::new(md5::Md5::default()),
-            DigestType::Sha1 => Box::new(sha1::Sha1::default()),
-            DigestType::Sha256 => Box::new(sha2::Sha256::default()),
-            DigestType::Sha384 => Box::new(sha2::Sha384::default()),
-            DigestType::Sha512 => Box::new(sha2::Sha512::default()),
-        }
-    }
-
-    fn pkcs1v15(&self) -> Pkcs1v15Sign {
-        match self {
-            DigestType::Md5 => Pkcs1v15Sign::new::<md5::Md5>(),
-            DigestType::Sha1 => Pkcs1v15Sign::new::<sha1::Sha1>(),
-            DigestType::Sha256 => Pkcs1v15Sign::new::<sha2::Sha256>(),
-            DigestType::Sha384 => Pkcs1v15Sign::new::<sha2::Sha384>(),
-            DigestType::Sha512 => Pkcs1v15Sign::new::<sha2::Sha512>(),
-        }
-    }
-
     /// The DER `DigestInfo` that RSASSA-PKCS1-v1_5 signs (RFC 8017 §9.2): an
     /// ASN.1 prefix naming the hash algorithm, followed by the hash itself.
     ///
     /// IKEv2 AUTH method 1 signs this, where IKEv1 signs the bare hash — the
     /// difference [`Crypto::verify_rsa_signature`] exists for, seen from the
-    /// signing side. It is built here rather than by a signer because a
-    /// [`crate::certs::ClientCertificate`] may hold its private key in a token
-    /// or in the Windows store, and can only PKCS#1-pad and encrypt whatever it
-    /// is handed.
+    /// signing side. It is built here rather than by an openssl `Signer`
+    /// because a [`crate::certs::ClientCertificate`] may hold its private key
+    /// in a token or in the Windows store, and can only PKCS#1-pad and encrypt
+    /// whatever it is handed.
     pub fn digest_info(&self, data: &[u8]) -> anyhow::Result<Bytes> {
         let prefix: &[u8] = match self {
             DigestType::Md5 => &[
@@ -148,9 +104,9 @@ impl DigestType {
             ],
         };
 
-        let mut hasher = self.new_hasher();
-        hasher.update(data);
-        let hash = hasher.finalize();
+        let mut hasher = Hasher::new((*self).into())?;
+        hasher.update(data)?;
+        let hash = hasher.finish()?;
 
         let mut buf = BytesMut::with_capacity(prefix.len() + hash.len());
         buf.extend_from_slice(prefix);
@@ -160,51 +116,16 @@ impl DigestType {
     }
 }
 
-/// One-shot hash of the concatenated chunks.
-pub(crate) fn hash_chunks<I, R>(digest: DigestType, data: I) -> Vec<u8>
-where
-    I: IntoIterator<Item = R>,
-    R: AsRef<[u8]>,
-{
-    let mut hasher = digest.new_hasher();
-    for d in data {
-        hasher.update(d.as_ref());
+impl From<DigestType> for MessageDigest {
+    fn from(value: DigestType) -> Self {
+        match value {
+            DigestType::Md5 => MessageDigest::md5(),
+            DigestType::Sha1 => MessageDigest::sha1(),
+            DigestType::Sha256 => MessageDigest::sha256(),
+            DigestType::Sha384 => MessageDigest::sha384(),
+            DigestType::Sha512 => MessageDigest::sha512(),
+        }
     }
-    hasher.finalize().to_vec()
-}
-
-/// HMAC over the concatenated chunks, dispatched by digest.
-pub(crate) fn hmac_chunks<I, R>(digest: DigestType, key: &[u8], data: I) -> Vec<u8>
-where
-    I: IntoIterator<Item = R>,
-    R: AsRef<[u8]>,
-{
-    use hmac::Mac;
-
-    macro_rules! run {
-        ($hash:ty) => {{
-            let mut mac = <hmac::Hmac<$hash>>::new_from_slice(key).expect("HMAC accepts keys of any length");
-            for d in data {
-                Mac::update(&mut mac, d.as_ref());
-            }
-            mac.finalize().into_bytes().to_vec()
-        }};
-    }
-
-    match digest {
-        DigestType::Md5 => run!(md5::Md5),
-        DigestType::Sha1 => run!(sha1::Sha1),
-        DigestType::Sha256 => run!(sha2::Sha256),
-        DigestType::Sha384 => run!(sha2::Sha384),
-        DigestType::Sha512 => run!(sha2::Sha512),
-    }
-}
-
-/// Constant-time equality, replacing `openssl::memcmp::eq`. Differing lengths are public, so the
-/// short-circuit on length is not a leak.
-pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    use subtle::ConstantTimeEq;
-    a.len() == b.len() && a.ct_eq(b).into()
 }
 
 /// Length of the AES-GCM authentication tag, which IKEv2 negotiates as three
@@ -327,17 +248,13 @@ impl CipherType {
         if self.is_aead() { 4 } else { 0 }
     }
 
-    /// Cipher block size in bytes.
-    fn cbc_block_size(&self) -> usize {
-        match self {
-            Self::DesEde3Cbc => 8,
-            _ => 16,
-        }
-    }
-
     /// Length of the explicit IV carried in the message.
     pub fn iv_len(&self) -> usize {
-        if self.is_aead() { 8 } else { self.cbc_block_size() }
+        if self.is_aead() {
+            8
+        } else {
+            Cipher::from(*self).block_size()
+        }
     }
 
     /// Full nonce length expected by `encrypt_aead`/`decrypt_aead`: salt || IV.
@@ -347,11 +264,7 @@ impl CipherType {
 
     /// Length of the key proper, excluding any salt.
     pub fn key_len(&self) -> usize {
-        match self {
-            Self::Aes128Cbc | Self::Aes128Gcm(_) => 16,
-            Self::Aes192Cbc | Self::Aes192Gcm(_) | Self::DesEde3Cbc => 24,
-            Self::Aes256Cbc | Self::Aes256Gcm(_) => 32,
-        }
+        Cipher::from(*self).key_len()
     }
 
     /// Number of octets of keying material to draw for this cipher: key || salt.
@@ -362,7 +275,25 @@ impl CipherType {
     /// Plaintext padding boundary. GCM is a stream mode, so RFC 7296 §3.14
     /// only requires 4-octet alignment there.
     pub fn block_size(&self) -> usize {
-        if self.is_aead() { 4 } else { self.cbc_block_size() }
+        if self.is_aead() {
+            4
+        } else {
+            Cipher::from(*self).block_size()
+        }
+    }
+}
+
+impl From<CipherType> for Cipher {
+    fn from(value: CipherType) -> Self {
+        match value {
+            CipherType::Aes128Cbc => Cipher::aes_128_cbc(),
+            CipherType::Aes192Cbc => Cipher::aes_192_cbc(),
+            CipherType::Aes256Cbc => Cipher::aes_256_cbc(),
+            CipherType::DesEde3Cbc => Cipher::des_ede3_cbc(),
+            CipherType::Aes128Gcm(_) => Cipher::aes_128_gcm(),
+            CipherType::Aes192Gcm(_) => Cipher::aes_192_gcm(),
+            CipherType::Aes256Gcm(_) => Cipher::aes_256_gcm(),
+        }
     }
 }
 
@@ -433,77 +364,47 @@ impl GroupType {
         }
     }
 
-    fn modp_prime(&self) -> Option<&'static [u8]> {
+    fn nid(&self) -> anyhow::Result<Nid> {
         match self {
-            GroupType::Oakley2 => Some(G2_P),
-            GroupType::Oakley14 => Some(G14_P),
-            _ => None,
+            GroupType::EcP256 => Ok(Nid::X9_62_PRIME256V1),
+            GroupType::EcP384 => Ok(Nid::SECP384R1),
+            GroupType::EcP521 => Ok(Nid::SECP521R1),
+            other => Err(anyhow!("Not an elliptic curve group: {:?}", other)),
         }
     }
-}
 
-/// Finite-field (MODP) key agreement state: a fixed prime/generator and our
-/// ephemeral private exponent, with the public value `g^x mod p` precomputed.
-struct ModpKex {
-    p: BigUint,
-    x: BigUint,
-    public: BigUint,
-}
-
-impl ModpKex {
-    fn generate(prime: &[u8]) -> anyhow::Result<Self> {
-        let p = BigUint::from_bytes_be(prime);
-        let g = BigUint::from(2u32);
-
-        // Private exponent in [2, p-2]. Drawn from fresh OS randomness the same
-        // width as the modulus, then reduced into range.
-        let mut buf = vec![0u8; prime.len()];
-        rand::fill(&mut buf[..]);
-        let modulus = &p - BigUint::from(4u32);
-        let x = BigUint::from_bytes_be(&buf) % modulus + BigUint::from(2u32);
-
-        let public = g.modpow(&x, &p);
-        Ok(Self { p, x, public })
+    fn ec_group(&self) -> anyhow::Result<EcGroup> {
+        Ok(EcGroup::from_curve_name(self.nid()?)?)
     }
-}
-
-/// Elliptic-curve key agreement state. Each curve is a distinct RustCrypto type,
-/// so they cannot share a field.
-enum EcKex {
-    P256(p256::ecdh::EphemeralSecret),
-    P384(p384::ecdh::EphemeralSecret),
-    P521(p521::ecdh::EphemeralSecret),
 }
 
 /// Ephemeral key agreement state, either finite-field (MODP) or elliptic curve.
 enum KeyExchange {
-    Modp(ModpKex),
-    Ecp(EcKex),
+    Modp(Dh<Private>),
+    Ecp(PKey<Private>),
 }
 
 impl KeyExchange {
     fn generate(group: GroupType) -> anyhow::Result<Self> {
-        match group {
-            GroupType::EcP256 => Ok(KeyExchange::Ecp(EcKex::P256(p256::ecdh::EphemeralSecret::random(
-                &mut rand_core::OsRng,
-            )))),
-            GroupType::EcP384 => Ok(KeyExchange::Ecp(EcKex::P384(p384::ecdh::EphemeralSecret::random(
-                &mut rand_core::OsRng,
-            )))),
-            GroupType::EcP521 => Ok(KeyExchange::Ecp(EcKex::P521(p521::ecdh::EphemeralSecret::random(
-                &mut rand_core::OsRng,
-            )))),
-            GroupType::Oakley2 | GroupType::Oakley14 => {
-                let prime = group.modp_prime().context("No MODP prime for group")?;
-                Ok(KeyExchange::Modp(ModpKex::generate(prime)?))
-            }
+        if group.is_ecp() {
+            let ec_group = group.ec_group()?;
+            Ok(KeyExchange::Ecp(PKey::from_ec_key(EcKey::generate(&ec_group)?)?))
+        } else {
+            let p = BigNum::from_slice(match group {
+                GroupType::Oakley2 => G2_P,
+                GroupType::Oakley14 => G14_P,
+                other => return Err(anyhow!("No MODP prime for group: {:?}", other)),
+            })?;
+            Ok(KeyExchange::Modp(
+                Dh::from_pqg(p, None, BigNum::from_u32(2)?)?.generate_key()?,
+            ))
         }
     }
 }
 
 /// Left-pad `data` with zeroes to exactly `len` octets. IKE carries both the
-/// KE payload and the shared secret as fixed-width big-endian integers, but a
-/// big integer renders without leading zeroes.
+/// KE payload and the shared secret as fixed-width big-endian integers, but
+/// `BigNum` renders them without leading zeroes.
 fn left_pad(data: &[u8], len: usize) -> anyhow::Result<Bytes> {
     if data.len() > len {
         return Err(anyhow!("Value of {} bytes exceeds the expected {}", data.len(), len));
@@ -515,6 +416,9 @@ fn left_pad(data: &[u8], len: usize) -> anyhow::Result<Bytes> {
 
 pub struct Crypto {
     kex: KeyExchange,
+    digest: MessageDigest,
+    prf_digest: MessageDigest,
+    cipher: Cipher,
     digest_type: DigestType,
     prf_type: DigestType,
     cipher_type: CipherType,
@@ -527,6 +431,9 @@ impl Crypto {
     pub fn with_parameters(digest: DigestType, cipher: CipherType, group: GroupType) -> anyhow::Result<Self> {
         Ok(Self {
             kex: KeyExchange::generate(group)?,
+            digest: digest.into(),
+            prf_digest: digest.into(),
+            cipher: cipher.into(),
             digest_type: digest,
             prf_type: digest,
             cipher_type: cipher,
@@ -542,6 +449,7 @@ impl Crypto {
     }
 
     pub fn set_prf(&mut self, prf: DigestType) {
+        self.prf_digest = prf.into();
         self.prf_type = prf;
     }
 
@@ -552,27 +460,31 @@ impl Crypto {
     /// through [`Crypto::with_parameters`], which would generate a new one and
     /// invalidate the KE payload already on the wire.
     pub fn set_digest(&mut self, digest: DigestType) {
+        self.digest = digest.into();
         self.digest_type = digest;
     }
 
-    /// Override the cipher, keeping the key exchange. See [`Crypto::set_digest`].
+    /// Override the cipher, keeping the key exchange. See
+    /// [`Crypto::set_digest`].
     pub fn set_cipher(&mut self, cipher: CipherType) {
+        self.cipher = cipher.into();
         self.cipher_type = cipher;
     }
 
     pub fn public_key(&self) -> anyhow::Result<Bytes> {
         match &self.kex {
-            KeyExchange::Modp(modp) => left_pad(&modp.public.to_bytes_be(), self.group_type.public_key_len()),
-            KeyExchange::Ecp(ec) => {
-                use p256::elliptic_curve::sec1::ToEncodedPoint;
-                // Strip the 0x04 uncompressed-point marker: IKE carries x || y.
-                let bytes = match ec {
-                    EcKex::P256(s) => s.public_key().to_encoded_point(false).as_bytes().to_vec(),
-                    EcKex::P384(s) => s.public_key().to_encoded_point(false).as_bytes().to_vec(),
-                    EcKex::P521(s) => s.public_key().to_encoded_point(false).as_bytes().to_vec(),
-                };
+            KeyExchange::Modp(dh) => left_pad(&dh.public_key().to_vec(), self.group_type.public_key_len()),
+            KeyExchange::Ecp(pkey) => {
+                let ec_group = self.group_type.ec_group()?;
+                let mut ctx = BigNumContext::new()?;
+                let point =
+                    pkey.ec_key()?
+                        .public_key()
+                        .to_bytes(&ec_group, PointConversionForm::UNCOMPRESSED, &mut ctx)?;
+
+                // strip the 0x04 uncompressed-point marker: IKE carries x || y
                 Ok(Bytes::copy_from_slice(
-                    bytes.get(1..).context("Malformed EC public key")?,
+                    point.get(1..).context("Malformed EC public key")?,
                 ))
             }
         }
@@ -580,22 +492,21 @@ impl Crypto {
 
     pub fn shared_secret(&self, public_key: &[u8]) -> anyhow::Result<Bytes> {
         match &self.kex {
-            KeyExchange::Modp(modp) => {
-                let peer = BigUint::from_bytes_be(public_key);
-                let one = BigUint::from(1u32);
-                let limit = &modp.p - &one;
+            KeyExchange::Modp(dh) => {
+                let peer = BigNum::from_slice(public_key)?;
+                let one = BigNum::from_u32(1)?;
 
                 // 1 < peer < p - 1, otherwise the shared secret is degenerate
+                let mut limit = BigNum::new()?;
+                limit.checked_sub(dh.prime_p(), &one)?;
+
                 if peer <= one || peer >= limit {
                     return Err(anyhow!("Peer public key is out of range"));
                 }
 
-                left_pad(
-                    &peer.modpow(&modp.x, &modp.p).to_bytes_be(),
-                    self.group_type.shared_secret_len(),
-                )
+                left_pad(&dh.compute_key(&peer)?, self.group_type.shared_secret_len())
             }
-            KeyExchange::Ecp(ec) => {
+            KeyExchange::Ecp(pkey) => {
                 let expected = self.group_type.public_key_len();
                 if public_key.len() != expected {
                     return Err(anyhow!(
@@ -605,14 +516,41 @@ impl Crypto {
                     ));
                 }
 
-                // Re-attach the SEC1 uncompressed-point marker the wire format drops.
-                let mut sec1 = Vec::with_capacity(1 + public_key.len());
-                sec1.push(0x04);
-                sec1.extend_from_slice(public_key);
+                let ec_group = self.group_type.ec_group()?;
+                let mut ctx = BigNumContext::new()?;
 
-                ecdh_shared(ec, &sec1)
+                let mut encoded = Vec::with_capacity(1 + public_key.len());
+                encoded.push(0x04); // uncompressed point
+                encoded.extend_from_slice(public_key);
+
+                let point = EcPoint::from_bytes(&ec_group, &encoded, &mut ctx)?;
+                let peer = EcKey::from_public_key(&ec_group, &point)?;
+                peer.check_key().context("Peer public key is not on the curve")?;
+
+                let peer = PKey::from_ec_key(peer)?;
+
+                let mut deriver = Deriver::new(pkey)?;
+                deriver.set_peer(&peer)?;
+
+                // ECDH yields the x coordinate, already padded to the field size
+                Ok(deriver.derive_to_vec()?.into())
             }
         }
+    }
+
+    fn hmac<I, R>(&self, digest: MessageDigest, key: &[u8], data: I) -> anyhow::Result<Bytes>
+    where
+        I: IntoIterator<Item = R>,
+        R: AsRef<[u8]>,
+    {
+        let key = PKey::hmac(key)?;
+
+        let mut signer = Signer::new(digest, &key)?;
+        for d in data.into_iter() {
+            signer.update(d.as_ref())?;
+        }
+
+        Ok(signer.sign_to_vec()?.into())
     }
 
     pub fn prf<I, R>(&self, key: &[u8], data: I) -> anyhow::Result<Bytes>
@@ -620,7 +558,7 @@ impl Crypto {
         I: IntoIterator<Item = R>,
         R: AsRef<[u8]>,
     {
-        Ok(hmac_chunks(self.prf_type, key, data).into())
+        self.hmac(self.prf_digest, key, data)
     }
 
     /// `prf+` key expansion, RFC 7296 §2.13:
@@ -654,7 +592,7 @@ impl Crypto {
         I: IntoIterator<Item = R>,
         R: AsRef<[u8]>,
     {
-        let mut mac: Bytes = hmac_chunks(self.digest_type, key, data).into();
+        let mut mac = self.hmac(self.digest, key, data)?;
         mac.truncate(self.digest_type.integrity_len());
         Ok(mac)
     }
@@ -664,21 +602,36 @@ impl Crypto {
         I: IntoIterator<Item = R>,
         R: AsRef<[u8]>,
     {
-        Ok(hash_chunks(self.digest_type, data).into())
+        let mut hasher = Hasher::new(self.digest)?;
+        for d in data.into_iter() {
+            hasher.update(d.as_ref())?;
+        }
+        Ok(hasher.finish()?.to_vec().into())
+    }
+
+    fn enc_dec(&self, mode: Mode, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Bytes> {
+        if self.cipher_type.is_aead() {
+            return Err(anyhow!(
+                "Cipher {:?} is AEAD, use encrypt_aead/decrypt_aead",
+                self.cipher_type
+            ));
+        }
+
+        let mut crypter = Crypter::new(self.cipher, mode, key, Some(iv))?;
+        crypter.pad(false);
+        let mut out = vec![0; data.len() + self.cipher.block_size()];
+        let count = crypter.update(data, &mut out)?;
+        let rest = crypter.finalize(&mut out[count..])?;
+        out.truncate(count + rest);
+        Ok(out.into())
     }
 
     pub fn encrypt(&self, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Bytes> {
-        if self.cipher_type.is_aead() {
-            return Err(anyhow!("Cipher {:?} is AEAD, use encrypt_aead", self.cipher_type));
-        }
-        Ok(cbc_encrypt(self.cipher_type, key, data, iv)?.into())
+        self.enc_dec(Mode::Encrypt, key, data, iv)
     }
 
     pub fn decrypt(&self, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Bytes> {
-        if self.cipher_type.is_aead() {
-            return Err(anyhow!("Cipher {:?} is AEAD, use decrypt_aead", self.cipher_type));
-        }
-        Ok(cbc_decrypt(self.cipher_type, key, data, iv)?.into())
+        self.enc_dec(Mode::Decrypt, key, data, iv)
     }
 
     /// AEAD encryption. `nonce` is the full salt || IV value; `aad` is the
@@ -686,7 +639,21 @@ impl Crypto {
     /// `ciphertext || ICV`.
     pub fn encrypt_aead(&self, key: &[u8], data: &[u8], nonce: &[u8], aad: &[u8]) -> anyhow::Result<Bytes> {
         self.check_aead(key, nonce)?;
-        Ok(gcm_encrypt(self.cipher_type, key, data, nonce, aad)?.into())
+
+        let mut crypter = Crypter::new(self.cipher, Mode::Encrypt, key, Some(nonce))?;
+        crypter.pad(false);
+        crypter.aad_update(aad)?;
+
+        let mut out = vec![0; data.len() + self.cipher.block_size()];
+        let count = crypter.update(data, &mut out)?;
+        let rest = crypter.finalize(&mut out[count..])?;
+        out.truncate(count + rest);
+
+        let mut icv = vec![0u8; self.cipher_type.icv_len()];
+        crypter.get_tag(&mut icv)?;
+        out.extend_from_slice(&icv);
+
+        Ok(out.into())
     }
 
     /// AEAD decryption. `data` is `ciphertext || ICV`; fails if the ICV does
@@ -698,8 +665,19 @@ impl Crypto {
         if data.len() < icv_len {
             return Err(anyhow!("AEAD ciphertext is shorter than its ICV"));
         }
+        let (ciphertext, icv) = data.split_at(data.len() - icv_len);
 
-        Ok(gcm_decrypt(self.cipher_type, key, data, nonce, aad)?.into())
+        let mut crypter = Crypter::new(self.cipher, Mode::Decrypt, key, Some(nonce))?;
+        crypter.pad(false);
+        crypter.aad_update(aad)?;
+
+        let mut out = vec![0; ciphertext.len() + self.cipher.block_size()];
+        let count = crypter.update(ciphertext, &mut out)?;
+        crypter.set_tag(icv)?;
+        let rest = crypter.finalize(&mut out[count..]).context("AEAD ICV mismatch")?;
+        out.truncate(count + rest);
+
+        Ok(out.into())
     }
 
     fn check_aead(&self, key: &[u8], nonce: &[u8]) -> anyhow::Result<()> {
@@ -753,11 +731,11 @@ impl Crypto {
     }
 
     pub fn hash_len(&self) -> usize {
-        self.digest_type.hash_len()
+        self.digest.size()
     }
 
     pub fn prf_len(&self) -> usize {
-        self.prf_type.hash_len()
+        self.prf_digest.size()
     }
 
     pub fn integrity_len(&self) -> usize {
@@ -794,158 +772,27 @@ impl Crypto {
         cert: &[u8],
         digest: DigestType,
     ) -> anyhow::Result<()> {
-        let public_key = rsa_public_from_cert(cert)?;
-        let hash = hash_chunks(digest, [data]);
+        let public_key = X509::from_der(cert)?.public_key()?;
 
-        public_key
-            .verify(digest.pkcs1v15(), &hash, signature)
+        let mut verifier = Verifier::new(digest.into(), &public_key)?;
+        verifier.update(data)?;
+
+        verifier
+            .verify(signature)?
+            .then_some(())
             .context("Signature verification failed!")
     }
 
     pub fn verify_signature(&self, hash: &[u8], signature: &[u8], cert: &[u8]) -> anyhow::Result<()> {
-        let public_key = rsa_public_from_cert(cert)?;
+        let rsa = X509::from_der(cert)?.public_key()?.rsa()?;
 
-        // IKEv1 signs the bare hash (no DigestInfo), matching OpenSSL's raw
-        // public_decrypt + compare: PKCS#1 v1.5 padding over the hash itself.
-        public_key
-            .verify(Pkcs1v15Sign::new_unprefixed(), hash, signature)
+        let mut buf = vec![0u8; rsa.size() as usize];
+
+        let len = rsa.public_decrypt(signature, &mut buf, Padding::PKCS1)?;
+
+        (&buf[..len] == hash)
+            .then_some(())
             .context("Signature verification failed!")
-    }
-}
-
-/// Parse an RSA public key from a DER-encoded X.509 certificate.
-fn rsa_public_from_cert(cert: &[u8]) -> anyhow::Result<RsaPublicKey> {
-    use x509_parser::prelude::*;
-
-    let (_, parsed) = X509Certificate::from_der(cert).map_err(|e| anyhow!("Cannot parse certificate: {e}"))?;
-
-    match parsed
-        .public_key()
-        .parsed()
-        .map_err(|e| anyhow!("Cannot parse public key: {e}"))?
-    {
-        x509_parser::public_key::PublicKey::RSA(rsa) => {
-            let n = rsa::BigUint::from_bytes_be(rsa.modulus);
-            let e = rsa::BigUint::from_bytes_be(rsa.exponent);
-            RsaPublicKey::new(n, e).map_err(|e| anyhow!("Invalid RSA public key: {e}"))
-        }
-        _ => Err(anyhow!("Certificate does not contain an RSA public key")),
-    }
-}
-
-/// AES/3DES-CBC with no padding (IKE/ESP pad the plaintext themselves).
-pub(crate) fn cbc_encrypt(cipher: CipherType, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Vec<u8>> {
-    use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::NoPadding};
-
-    macro_rules! run {
-        ($block:ty) => {{
-            cbc::Encryptor::<$block>::new_from_slices(key, iv)
-                .map_err(|e| anyhow!("CBC init failed: {e}"))?
-                .encrypt_padded_vec_mut::<NoPadding>(data)
-        }};
-    }
-
-    match cipher {
-        CipherType::Aes128Cbc => Ok(run!(aes::Aes128)),
-        CipherType::Aes192Cbc => Ok(run!(aes::Aes192)),
-        CipherType::Aes256Cbc => Ok(run!(aes::Aes256)),
-        CipherType::DesEde3Cbc => Ok(run!(des::TdesEde3)),
-        other => Err(anyhow!("Cipher {:?} is not a CBC cipher", other)),
-    }
-}
-
-pub(crate) fn cbc_decrypt(cipher: CipherType, key: &[u8], data: &[u8], iv: &[u8]) -> anyhow::Result<Vec<u8>> {
-    use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
-
-    macro_rules! run {
-        ($block:ty) => {{
-            cbc::Decryptor::<$block>::new_from_slices(key, iv)
-                .map_err(|e| anyhow!("CBC init failed: {e}"))?
-                .decrypt_padded_vec_mut::<NoPadding>(data)
-                .map_err(|e| anyhow!("CBC decrypt failed: {e}"))?
-        }};
-    }
-
-    match cipher {
-        CipherType::Aes128Cbc => Ok(run!(aes::Aes128)),
-        CipherType::Aes192Cbc => Ok(run!(aes::Aes192)),
-        CipherType::Aes256Cbc => Ok(run!(aes::Aes256)),
-        CipherType::DesEde3Cbc => Ok(run!(des::TdesEde3)),
-        other => Err(anyhow!("Cipher {:?} is not a CBC cipher", other)),
-    }
-}
-
-/// AES-GCM AEAD. Returns `ciphertext || tag`, the tag truncated to the
-/// negotiated ICV length (ENCR_AES_GCM_8/12/16) via the tag-size type parameter.
-pub(crate) fn gcm_encrypt(
-    cipher: CipherType,
-    key: &[u8],
-    data: &[u8],
-    nonce: &[u8],
-    aad: &[u8],
-) -> anyhow::Result<Vec<u8>> {
-    use aes_gcm::{
-        AesGcm, KeyInit,
-        aead::{Aead, Payload},
-    };
-
-    macro_rules! run {
-        ($aes:ty, $tag:ty) => {{
-            let c = AesGcm::<$aes, U12, $tag>::new_from_slice(key).map_err(|_| anyhow!("Invalid GCM key"))?;
-            c.encrypt(aes_gcm::Nonce::<U12>::from_slice(nonce), Payload { msg: data, aad })
-                .map_err(|_| anyhow!("AEAD encryption failed"))?
-        }};
-    }
-
-    Ok(gcm_match!(cipher, run))
-}
-
-pub(crate) fn gcm_decrypt(
-    cipher: CipherType,
-    key: &[u8],
-    data: &[u8],
-    nonce: &[u8],
-    aad: &[u8],
-) -> anyhow::Result<Vec<u8>> {
-    use aes_gcm::{
-        AesGcm, KeyInit,
-        aead::{Aead, Payload},
-    };
-
-    macro_rules! run {
-        ($aes:ty, $tag:ty) => {{
-            let c = AesGcm::<$aes, U12, $tag>::new_from_slice(key).map_err(|_| anyhow!("Invalid GCM key"))?;
-            c.decrypt(aes_gcm::Nonce::<U12>::from_slice(nonce), Payload { msg: data, aad })
-                .map_err(|_| anyhow!("AEAD ICV mismatch"))?
-        }};
-    }
-
-    Ok(gcm_match!(cipher, run))
-}
-
-/// ECDH shared secret (the x coordinate) from an SEC1 uncompressed peer point.
-fn ecdh_shared(ec: &EcKex, sec1_peer: &[u8]) -> anyhow::Result<Bytes> {
-    use p256::elliptic_curve::sec1::FromEncodedPoint;
-
-    match ec {
-        EcKex::P256(secret) => {
-            let point = p256::EncodedPoint::from_bytes(sec1_peer).map_err(|e| anyhow!("Malformed EC point: {e}"))?;
-            let peer = Option::from(p256::PublicKey::from_encoded_point(&point))
-                .context("Peer public key is not on the curve")?;
-            Ok(Bytes::copy_from_slice(secret.diffie_hellman(&peer).raw_secret_bytes()))
-        }
-        EcKex::P384(secret) => {
-            let point = p384::EncodedPoint::from_bytes(sec1_peer).map_err(|e| anyhow!("Malformed EC point: {e}"))?;
-            let peer = Option::from(p384::PublicKey::from_encoded_point(&point))
-                .context("Peer public key is not on the curve")?;
-            Ok(Bytes::copy_from_slice(secret.diffie_hellman(&peer).raw_secret_bytes()))
-        }
-        EcKex::P521(secret) => {
-            let point = p521::EncodedPoint::from_bytes(sec1_peer).map_err(|e| anyhow!("Malformed EC point: {e}"))?;
-            let peer = Option::from(p521::PublicKey::from_encoded_point(&point))
-                .context("Peer public key is not on the curve")?;
-            Ok(Bytes::copy_from_slice(secret.diffie_hellman(&peer).raw_secret_bytes()))
-        }
     }
 }
 
@@ -1111,8 +958,7 @@ mod tests {
         }
     }
 
-    /// ENCR_AES_GCM_12 truncates the 16-octet tag; ENCR_AES_GCM_8 is unsupported
-    /// by the RustCrypto backend (its TagSize floor is 12 octets).
+    /// ENCR_AES_GCM_8 / _12 simply truncate the 16-octet tag.
     #[test]
     fn test_aes_gcm_truncated_icv() {
         let key = hex::decode("feffe9928665731c6d6a8f9467308308").unwrap();
@@ -1120,15 +966,17 @@ mod tests {
         let aad = hex::decode(GCM_AAD).unwrap();
         let plaintext = hex::decode(GCM_PT.replace(' ', "")).unwrap();
 
-        let aead = crypto(DigestType::Sha256, CipherType::Aes128Gcm(IcvLength::Twelve));
-        let encrypted = aead.encrypt_aead(&key, &plaintext, &nonce, &aad).unwrap();
-        assert_eq!(encrypted.len(), plaintext.len() + IcvLength::Twelve.size());
-        assert_eq!(hex::encode(&encrypted[plaintext.len()..]), "5bc94fbc3221a5db94fae95a");
-        assert_eq!(aead.decrypt_aead(&key, &encrypted, &nonce, &aad).unwrap(), plaintext);
+        for (icv_len, expected) in [
+            (IcvLength::Eight, "5bc94fbc3221a5db"),
+            (IcvLength::Twelve, "5bc94fbc3221a5db94fae95a"),
+        ] {
+            let crypto = crypto(DigestType::Sha256, CipherType::Aes128Gcm(icv_len));
+            let encrypted = crypto.encrypt_aead(&key, &plaintext, &nonce, &aad).unwrap();
 
-        // AES-GCM-8 is rejected rather than silently weakened.
-        let gcm8 = crypto(DigestType::Sha256, CipherType::Aes128Gcm(IcvLength::Eight));
-        assert!(gcm8.encrypt_aead(&key, &plaintext, &nonce, &aad).is_err());
+            assert_eq!(encrypted.len(), plaintext.len() + icv_len.size());
+            assert_eq!(hex::encode(&encrypted[plaintext.len()..]), expected);
+            assert_eq!(crypto.decrypt_aead(&key, &encrypted, &nonce, &aad).unwrap(), plaintext);
+        }
     }
 
     #[test]
@@ -1164,7 +1012,7 @@ mod tests {
         assert!(cbc.encrypt_aead(&[0x42; 32], b"payload", &[0x11; 12], b"").is_err());
         assert!(cbc.decrypt_aead(&[0x42; 32], b"payload", &[0x11; 12], b"").is_err());
 
-        // wrong key or nonce length is caught before the cipher sees it
+        // wrong key or nonce length is caught before openssl sees it
         assert!(gcm.encrypt_aead(&[0x42; 16], b"payload", &[0x11; 12], b"").is_err());
         assert!(gcm.encrypt_aead(&[0x42; 32], b"payload", &[0x11; 8], b"").is_err());
     }
@@ -1280,14 +1128,11 @@ mod tests {
     }
 
     /// The DigestInfo prefixes of RFC 8017 §9.2, pinned against the hash of an
-    /// empty input, and then shown to be exactly what a standard
-    /// RSASSA-PKCS1-v1_5 signature is made over: signing this blob with raw
-    /// (unprefixed) PKCS#1 padding must verify as an ordinary signature over the
-    /// data.
+    /// empty input, and then shown to be exactly what a standard RSASSA-PKCS1-v1_5
+    /// signature is made over: a PKCS#1-padded private encryption of this blob
+    /// must verify as an ordinary signature over the data.
     #[test]
     fn test_digest_info_is_an_rsa_pkcs1_signature_input() {
-        use rsa::{RsaPrivateKey, RsaPublicKey};
-
         assert_eq!(
             hex::encode(DigestType::Sha1.digest_info(b"").unwrap()),
             "3021300906052b0e03021a05000414da39a3ee5e6b4b0d3255bfef95601890afd80709"
@@ -1298,23 +1143,21 @@ mod tests {
              e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
 
-        let private = RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
-        let public = RsaPublicKey::from(&private);
+        let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
+        let key = PKey::from_rsa(rsa.clone()).unwrap();
         let data = b"InitiatorSignedOctets";
 
         for digest in [DigestType::Sha1, DigestType::Sha256, DigestType::Sha512] {
             let info = digest.digest_info(data).unwrap();
 
-            // what `ClientCertificate::sign` does with the blob: raw PKCS#1 over
-            // the DigestInfo, no second prefix.
-            let signature = private.sign(Pkcs1v15Sign::new_unprefixed(), &info).unwrap();
+            // what `ClientCertificate::sign` does with the blob
+            let mut signature = vec![0u8; rsa.size() as usize];
+            let len = rsa.private_encrypt(&info, &mut signature, Padding::PKCS1).unwrap();
+            signature.truncate(len);
 
-            // and it verifies as an ordinary signature over the data
-            let hash = hash_chunks(digest, [data.as_ref()]);
-            assert!(
-                public.verify(digest.pkcs1v15(), &hash, &signature).is_ok(),
-                "{digest:?}"
-            );
+            let mut verifier = Verifier::new(digest.into(), &key).unwrap();
+            verifier.update(data).unwrap();
+            assert!(verifier.verify(&signature).unwrap(), "{digest:?}");
         }
     }
 
@@ -1323,101 +1166,5 @@ mod tests {
         assert_eq!(left_pad(&[1, 2], 4).unwrap(), Bytes::from_static(&[0, 0, 1, 2]));
         assert_eq!(left_pad(&[1, 2], 2).unwrap(), Bytes::from_static(&[1, 2]));
         assert!(left_pad(&[1, 2, 3], 2).is_err());
-    }
-
-    /// Cross-check against OpenSSL (dev-dependency): the RustCrypto port must agree with an
-    /// independent implementation, not just with itself.
-    mod openssl_interop {
-        use super::*;
-        use openssl::{
-            bn::BigNum,
-            dh::Dh,
-            hash::{MessageDigest, hash},
-            pkey::PKey,
-            sign::Signer,
-            symm::{Cipher, Crypter, Mode},
-        };
-
-        fn ossl_digest(d: DigestType) -> MessageDigest {
-            match d {
-                DigestType::Md5 => MessageDigest::md5(),
-                DigestType::Sha1 => MessageDigest::sha1(),
-                DigestType::Sha256 => MessageDigest::sha256(),
-                DigestType::Sha384 => MessageDigest::sha384(),
-                DigestType::Sha512 => MessageDigest::sha512(),
-            }
-        }
-
-        #[test]
-        fn modp_dh_agrees_with_openssl() {
-            for (group, prime) in [(GroupType::Oakley2, G2_P), (GroupType::Oakley14, G14_P)] {
-                let ours = Crypto::with_parameters(DigestType::Sha256, CipherType::Aes256Cbc, group).unwrap();
-                let theirs = Dh::from_pqg(BigNum::from_slice(prime).unwrap(), None, BigNum::from_u32(2).unwrap())
-                    .unwrap()
-                    .generate_key()
-                    .unwrap();
-
-                let our_pub = ours.public_key().unwrap();
-                let their_pub = left_pad(&theirs.public_key().to_vec(), group.public_key_len()).unwrap();
-
-                let ours_shared = ours.shared_secret(&their_pub).unwrap();
-                let theirs_shared = left_pad(
-                    &theirs.compute_key(&BigNum::from_slice(&our_pub).unwrap()).unwrap(),
-                    group.shared_secret_len(),
-                )
-                .unwrap();
-
-                assert_eq!(ours_shared, theirs_shared, "{group:?}");
-            }
-        }
-
-        #[test]
-        fn hash_and_hmac_agree_with_openssl() {
-            let key = b"0123456789abcdef0123456789abcdef-long-key-exceeding-block-size-for-sha1-and-sha256-xx";
-            let data = b"identity protection payload";
-            for d in [
-                DigestType::Md5,
-                DigestType::Sha1,
-                DigestType::Sha256,
-                DigestType::Sha384,
-                DigestType::Sha512,
-            ] {
-                assert_eq!(
-                    hash_chunks(d, [data]),
-                    hash(ossl_digest(d), data).unwrap().to_vec(),
-                    "hash {d:?}"
-                );
-
-                let pkey = PKey::hmac(key).unwrap();
-                let mut signer = Signer::new(ossl_digest(d), &pkey).unwrap();
-                signer.update(data).unwrap();
-                assert_eq!(hmac_chunks(d, key, [data]), signer.sign_to_vec().unwrap(), "hmac {d:?}");
-            }
-        }
-
-        #[test]
-        fn cbc_agrees_with_openssl() {
-            let data: Vec<u8> = (0..64u8).collect();
-            for (ct, ossl, key_len, iv_len) in [
-                (CipherType::Aes128Cbc, Cipher::aes_128_cbc(), 16, 16),
-                (CipherType::Aes192Cbc, Cipher::aes_192_cbc(), 24, 16),
-                (CipherType::Aes256Cbc, Cipher::aes_256_cbc(), 32, 16),
-                (CipherType::DesEde3Cbc, Cipher::des_ede3_cbc(), 24, 8),
-            ] {
-                let key: Vec<u8> = (0..key_len as u8).map(|b| b.wrapping_mul(7)).collect();
-                let iv: Vec<u8> = (0..iv_len as u8).map(|b| b.wrapping_mul(13)).collect();
-
-                let mut crypter = Crypter::new(ossl, Mode::Encrypt, &key, Some(&iv)).unwrap();
-                crypter.pad(false);
-                let mut expected = vec![0u8; data.len() + 32];
-                let n = crypter.update(&data, &mut expected).unwrap();
-                let m = crypter.finalize(&mut expected[n..]).unwrap();
-                expected.truncate(n + m);
-
-                let ours = cbc_encrypt(ct, &key, &data, &iv).unwrap();
-                assert_eq!(ours, expected, "encrypt {ct:?}");
-                assert_eq!(cbc_decrypt(ct, &key, &ours, &iv).unwrap(), data, "decrypt {ct:?}");
-            }
-        }
     }
 }

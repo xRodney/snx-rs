@@ -596,12 +596,12 @@ impl Ikev2SessionImpl {
             AuthMethod::SharedKeyMic => {
                 let expected = self.auth_shared_key(&octets, &self.session_keys.sk_pr, self.auth_key_pad)?;
 
-                if crate::crypto::ct_eq(&expected, &auth.data) {
+                if openssl::memcmp::eq(&expected, &auth.data) {
                     return Ok(());
                 }
 
                 let other = self.auth_shared_key(&octets, &self.session_keys.sk_pr, !self.auth_key_pad)?;
-                if crate::crypto::ct_eq(&other, &auth.data) {
+                if openssl::memcmp::eq(&other, &auth.data) {
                     warn!(
                         "Responder's AUTH verifies with key_pad={}, not the configured {}",
                         !self.auth_key_pad, self.auth_key_pad

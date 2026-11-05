@@ -287,6 +287,8 @@ impl<M> TcptTransport<M> {
             }
             (None, Some(address)) => {
                 debug!("Connecting to {}", address);
+                // SNX-RS ANDROID PATCH (not upstream): was TcpStream::connect; connect_tcp applies the socket hook.
+                // See the patch block in transport.rs.
                 let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, super::connect_tcp(address)).await??;
                 stream.set_nodelay(true)?;
 

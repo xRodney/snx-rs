@@ -69,11 +69,10 @@ keychain, themes and notification level.
 
 Logs: `adb logcat -s snx-rs`.
 
-Current limitations (see docs/android-port.md and docs/deopenssl-plan.md):
+Current limitations (see docs/android-port.md):
 - Interactive MFA prompts (e.g. a typed one-time code) and the Mobile Access portal are not supported yet.
 - Certificate login (PKCS#12/PKCS#8) is configurable but untested on a device.
 - The SSL tunnel type is configurable but untested on a device.
-- AES-GCM-8 is unsupported (rarely negotiated).
 - Only IKEv1 has been exercised on a device.
 
 ## CI

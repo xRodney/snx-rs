@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use i18n::tr;
 use isakmp::{certs::ClientCertificate, model::Identity};
+use openssl::{nid::Nid, x509::X509};
 use secrecy::ExposeSecret;
 use tracing::debug;
 
@@ -79,15 +80,23 @@ fn pkcs11_driver_path(params: &TunnelParams) -> anyhow::Result<PathBuf> {
 /// The host part of the machine certificate's common name, which the gateway
 /// logs as the machine name.
 pub(crate) fn machine_name(certificate: &dyn ClientCertificate) -> Option<String> {
-    use x509_parser::prelude::{FromDer, X509Certificate};
-
-    let der = certificate.certs().into_iter().next()?;
-    let (_, cert) = X509Certificate::from_der(der.as_ref()).ok()?;
-    cert.subject()
-        .iter_common_name()
-        .next()
-        .and_then(|cn| cn.as_str().ok())
-        .and_then(|s| s.split('.').next().map(String::from))
+    certificate
+        .certs()
+        .first()
+        .and_then(|der| X509::from_der(der.as_ref()).ok())
+        .and_then(|cert| {
+            cert.subject_name().entries().find_map(|entry| {
+                if entry.object().nid() == Nid::COMMONNAME {
+                    entry
+                        .data()
+                        .to_string()
+                        .ok()
+                        .and_then(|s| s.split('.').next().map(String::from))
+                } else {
+                    None
+                }
+            })
+        })
 }
 
 pub(crate) fn auth_blob(params: &TunnelParams, info: &GatewayInformation, machine_name: Option<String>) -> SExpression {
