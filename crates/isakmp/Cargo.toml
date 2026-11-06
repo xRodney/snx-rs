@@ -4,8 +4,8 @@ version = "0.2.0"
 edition = "2024"
 authors = ["Dmitry Pankratov <dmitry@pankratov.net>"]
 license = "AGPL-3.0"
-# Vendored from https://github.com/ancwrd1/isakmp.git (rev ce07353). Local changes are marked
-# "SNX-RS ANDROID PATCH".
+# Vendored from https://github.com/ancwrd1/isakmp.git (rev ce07353). The ONLY local change is the
+# "SNX-RS ANDROID PATCH" socket hook in src/transport.rs + src/transport/tcpt.rs (grep for that marker).
 repository = "https://github.com/ancwrd1/isakmp"
 
 [dependencies]
