@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Android app (`android/`, with the Rust core in `apps/snxrs-android`): IPsec over the userspace ESP transport through Android's `VpnService`, password and identity provider (SSO) login, multiple connection profiles with the desktop options that apply on Android, and automatic reconnection after network changes. See [Building the Android APK](docs/android-build.md).
+
 ### Fixed
 
 - The connection could stay reported as connected after the tunnel failed to send a packet, for example when the network went away.
