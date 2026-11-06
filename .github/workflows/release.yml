@@ -143,8 +143,62 @@ jobs:
           name: artifacts-aarch64-macos
           path: target/snx-rs-*.dmg
 
+  build-android:
+    runs-on: ubuntu-24.04
+    env:
+      NDK_VERSION: "28.2.13676358"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Install JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          cargo install cargo-ndk --locked
+
+      # An APK is only published when signed with the project key: a different key per release would
+      # stop Android from installing one release over another.
+      - name: Build signed APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set; the release will have no Android APK"
+            exit 0
+          fi
+          export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/release.jks"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ANDROID_KEYSTORE_FILE"
+          (cd android && ./gradlew assembleRelease --no-daemon)
+          mkdir -p target
+          cp android/app/build/outputs/apk/release/app-release.apk "target/snx-rs-${{ github.ref_name }}-android.apk"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-android
+          path: target/snx-rs-*.apk
+          if-no-files-found: ignore
+
   release:
-    needs: [build, build-windows, build-macos]
+    needs: [build, build-windows, build-macos, build-android]
     runs-on: ubuntu-24.04
 
     steps:
@@ -276,6 +330,17 @@ jobs:
               name: macosName,
               data: macosArtifact
             });
+
+            const apkName = `snx-rs-${tagName}-android.apk`;
+            if (fs.existsSync(`artifacts/${apkName}`)) {
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.data.id,
+                name: apkName,
+                data: fs.readFileSync(`artifacts/${apkName}`)
+              });
+            }
 
             if (tagName.endsWith("-test")) {
               await github.rest.repos.deleteRelease({

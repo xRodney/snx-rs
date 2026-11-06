@@ -1,5 +1,10 @@
 import org.gradle.internal.os.OperatingSystem
 
+// The app takes its version from the cargo workspace, so releases match the desktop packages.
+val workspaceVersion: String = Regex("""(?m)^version\s*=\s*"([^"]+)"""")
+    .find(rootProject.file("../Cargo.toml").readText())!!.groupValues[1]
+val versionParts = workspaceVersion.split(".").map { it.toInt() }
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -14,10 +19,21 @@ android {
         applicationId = "net.pankratov.snxrs"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = versionParts[0] * 10000 + versionParts[1] * 100 + versionParts[2]
+        versionName = workspaceVersion
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+    }
+
+    signingConfigs {
+        System.getenv("ANDROID_KEYSTORE_FILE")?.let { keystore ->
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
         }
     }
 
@@ -26,8 +42,8 @@ android {
             isMinifyEnabled = false
         }
         getByName("release") {
-            // Debug-signed by default so `./gradlew assembleRelease` still yields an installable APK;
-            // supply your own signingConfig for distribution.
+            // Without ANDROID_KEYSTORE_FILE, debug-signed so a local `assembleRelease` is still installable.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = false
         }
     }

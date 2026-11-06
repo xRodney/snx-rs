@@ -88,3 +88,19 @@ Current limitations (see docs/android-port.md):
 `.github/workflows/android.yml` runs clippy for the Android target and Android lint, and builds the debug APK on every push and pull request (and on manual
 dispatch) and uploads it as the `snx-rs-android-debug` artifact. CI signs with a throwaway debug key, so
 `adb install -r` of a CI build over a locally built one fails with a signature mismatch — uninstall first.
+
+`.github/workflows/release.yml` also builds a release APK on version tags and attaches it to the GitHub
+release as `snx-rs-<tag>-android.apk`. The app version comes from the workspace `Cargo.toml`. The APK
+must be signed with the same key in every release, or Android refuses to update the installed app, so
+it is published only when these repository secrets are set (otherwise the release has no APK):
+
+| Secret | Value |
+|--------|-------|
+| `ANDROID_KEYSTORE_BASE64` | the keystore file, base64-encoded (`base64 -w0 release.jks`) |
+| `ANDROID_KEYSTORE_PASSWORD` | the keystore password |
+| `ANDROID_KEY_ALIAS` | the alias of the signing key |
+| `ANDROID_KEY_PASSWORD` | the key password |
+
+A keystore can be created with
+`keytool -genkeypair -keystore release.jks -alias snx-rs -keyalg RSA -keysize 4096 -validity 10000`.
+Keep it backed up: losing it means users must uninstall the app before they can install a newer release.

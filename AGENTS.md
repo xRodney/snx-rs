@@ -33,7 +33,7 @@ Top-level directories:
 * `android/` — the Android app (Kotlin, Gradle). Gradle runs cargo-ndk to build `libsnxrs.so`; see `docs/android-build.md`.
 * `docs/` — user-facing Markdown docs (`docs/README.md` is the index). Keep in sync when changing user-visible behavior.
 * `package/` — packaging assets: systemd unit (`snx-rs.service`), desktop file, Debian and RPM packaging, installer script, LTO build script.
-* `.github/workflows/` — `ci.yml` (fmt + clippy + test), `android.yml` (Android clippy + debug APK), `release.yml`, `automerge.yml`, `pages.yml`.
+* `.github/workflows/` — `ci.yml` (fmt + clippy + test), `android.yml` (Android clippy + debug APK), `release.yml` (release packages, including the signed APK), `automerge.yml`, `pages.yml`.
 * `i18n.md` — canonical instructions for translation tasks. Re-read before doing any locale work.
 * `CHANGELOG.md` — hand-maintained. Add a user-visible entry for any user-visible change.
 
