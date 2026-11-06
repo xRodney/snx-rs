@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">snx-rs</string>
+
+    <string name="label_profile">Profile</string>
+    <string name="label_edit">Edit</string>
+    <string name="label_new">New</string>
+    <string name="label_delete">Delete</string>
+    <string name="label_connect">Connect</string>
+    <string name="label_disconnect">Disconnect</string>
+    <string name="label_load_login_types">Load login types from gateway</string>
+
+    <string name="profile_unnamed">Unnamed</string>
+    <string name="profile_new_title">New profile</string>
+    <string name="profile_name_hint">Profile name</string>
+    <string name="profile_delete_confirm">Delete profile \"%1$s\"?</string>
+    <string name="profile_none">Create a profile first</string>
+    <string name="profile_incomplete">Set the gateway and login type in the profile first</string>
+
+    <string name="status_enter_server">Enter the gateway first</string>
+    <string name="status_loading">Loading login types…</string>
+    <plurals name="status_loaded">
+        <item quantity="one">%1$d login type loaded</item>
+        <item quantity="other">%1$d login types loaded</item>
+    </plurals>
+
+    <string name="state_connecting">Connecting…</string>
+    <string name="state_signin">Waiting for sign-in…</string>
+    <string name="state_connected">Connected</string>
+    <string name="state_reconnecting">Reconnecting…</string>
+    <string name="state_disconnected">Disconnected</string>
+    <string name="state_failed">Disconnected: %1$s</string>
+
+    <string name="value_not_set">Not set</string>
+    <string name="file_choose">Choose another file</string>
+    <string name="file_remove">Remove</string>
+
+    <string name="cat_connection">Connection</string>
+    <string name="cat_certificates">Certificates</string>
+    <string name="cat_routing">Routing</string>
+    <string name="cat_dns">DNS</string>
+    <string name="cat_advanced">Advanced</string>
+
+    <string name="opt_profile_name">Profile name</string>
+    <string name="opt_server_name">VPN gateway</string>
+    <string name="opt_load_login_types_summary">Fetch the login types this gateway offers</string>
+    <string name="opt_login_type">Login type</string>
+    <string name="opt_user_name">Username</string>
+    <string name="opt_password">Password</string>
+    <string name="opt_tunnel_type">Tunnel type</string>
+    <string name="opt_ike_version">IKE version</string>
+    <string name="opt_transport_type">IPsec transport</string>
+    <string name="opt_ignore_server_cert">Ignore server certificate</string>
+    <string name="opt_ignore_server_cert_summary">Disables TLS certificate checks (testing only)</string>
+    <string name="opt_ca_cert">CA certificate</string>
+    <string name="opt_tls_version_max">Maximum TLS version</string>
+    <string name="opt_cert_type">Client certificate type</string>
+    <string name="opt_cert_path">Client certificate file</string>
+    <string name="opt_cert_password">Client certificate password</string>
+    <string name="opt_default_route">Route all traffic through VPN</string>
+    <string name="opt_default_route_summary">Otherwise only the routes the gateway pushes</string>
+    <string name="opt_no_routing">Ignore routes pushed by the gateway</string>
+    <string name="opt_no_routing_summary">Only the additional routes below are used</string>
+    <string name="opt_add_routes">Additional routes</string>
+    <string name="opt_ignore_routes">Ignored routes</string>
+    <string name="opt_no_dns">Ignore DNS servers from the gateway</string>
+    <string name="opt_no_dns_summary">Do not use the VPN\'s DNS servers or search domains</string>
+    <string name="opt_dns_servers">Additional DNS servers</string>
+    <string name="opt_ignore_dns_servers">Ignored DNS servers</string>
+    <string name="opt_search_domains">Additional search domains</string>
+    <string name="opt_ignore_search_domains">Ignored search domains</string>
+    <string name="opt_mtu">MTU</string>
+    <string name="opt_password_factor">Password factor</string>
+    <string name="opt_password_factor_hint">Which MFA step the saved password answers (1 = first)</string>
+    <string name="opt_no_keepalive">Disable keepalive</string>
+    <string name="opt_port_knock">Port knocking</string>
+    <string name="opt_use_internal_gateway_ip">Use internal gateway IP</string>
+    <string name="opt_ike_persist">Persist IKE session</string>
+    <string name="opt_ike_persist_summary">Reconnect without signing in again after network drops</string>
+    <string name="opt_ike_lifetime">IKE SA lifetime (seconds)</string>
+    <string name="opt_ip_lease_time">Office mode IP lease time (seconds)</string>
+    <string name="opt_ip_lease_time_hint">Empty = gateway default</string>
+
+    <string name="hint_comma_subnets">Comma-separated, e.g. 10.1.0.0/16, 192.168.5.10</string>
+    <string name="hint_comma_ips">Comma-separated IPv4 addresses</string>
+    <string name="hint_comma_domains">Comma-separated domains</string>
+</resources>
