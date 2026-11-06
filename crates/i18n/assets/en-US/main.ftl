@@ -158,6 +158,9 @@ error-certificate-verify-failed = TLS certificate validation failed. The serverâ
 error-invalid-gateway-info = Invalid gateway information response
 error-invalid-notification-level = Invalid notification level
 error-unsupported-login-type = Unsupported login type
+error-connection-in-progress = A connection is already in progress; disconnect first
+error-interactive-mfa-unsupported = Interactive MFA prompts are not supported yet: {$prompt}
+error-unsupported-auth-factor = Unsupported authentication factor: {$factor}
 
 # Placeholder texts
 placeholder-domains = Comma-separated domains

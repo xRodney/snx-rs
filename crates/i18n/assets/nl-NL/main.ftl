@@ -158,6 +158,9 @@ error-certificate-verify-failed = TLS-certificaatvalidatie mislukt. Het certific
 error-invalid-gateway-info = Ongeldig gateway-informatieantwoord
 error-invalid-notification-level = Ongeldig meldingsniveau
 error-unsupported-login-type = Niet-ondersteund inlogtype
+error-connection-in-progress = Er wordt al een verbinding gemaakt; verbreek eerst de verbinding
+error-interactive-mfa-unsupported = Interactieve MFA-vragen worden nog niet ondersteund: {$prompt}
+error-unsupported-auth-factor = Niet-ondersteunde authenticatiefactor: {$factor}
 
 # Placeholder texts
 placeholder-domains = Door komma's gescheiden domeinen

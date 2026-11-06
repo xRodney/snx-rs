@@ -158,6 +158,9 @@ error-certificate-verify-failed = Validação do certificado TLS falhou. O certi
 error-invalid-gateway-info = Resposta de informações do gateway inválida
 error-invalid-notification-level = Nível de notificação inválido
 error-unsupported-login-type = Tipo de login não suportado
+error-connection-in-progress = Uma conexão já está em andamento; desconecte primeiro
+error-interactive-mfa-unsupported = Solicitações de MFA interativas ainda não são suportadas: {$prompt}
+error-unsupported-auth-factor = Fator de autenticação não suportado: {$factor}
 
 # Placeholder texts
 placeholder-domains = Domínios separados por vírgulas

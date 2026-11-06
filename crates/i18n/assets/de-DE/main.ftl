@@ -158,6 +158,9 @@ error-certificate-verify-failed = TLS-Zertifikatüberprüfung fehlgeschlagen. Da
 error-invalid-gateway-info = Ungültige Gateway-Informationsantwort
 error-invalid-notification-level = Ungültige Benachrichtigungsstufe
 error-unsupported-login-type = Nicht unterstützter Anmeldetyp
+error-connection-in-progress = Eine Verbindung wird bereits hergestellt; bitte zuerst trennen
+error-interactive-mfa-unsupported = Interaktive MFA-Abfragen werden noch nicht unterstützt: {$prompt}
+error-unsupported-auth-factor = Nicht unterstützter Authentifizierungsfaktor: {$factor}
 
 # Placeholder texts
 placeholder-domains = Durch Komma getrennte Domänen

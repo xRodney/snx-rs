@@ -508,7 +508,11 @@ impl Ikev1TunnelConnector {
     }
 
     fn store(&self) -> SessionStore {
-        SessionStore::new("ike_session", self.params.profile_id, self.params.server_name.clone())
+        SessionStore::new(
+            super::IKEV1_SESSION_TABLE,
+            self.params.profile_id,
+            self.params.server_name.clone(),
+        )
     }
 
     fn load_ike_session(&mut self) -> anyhow::Result<OfficeMode> {

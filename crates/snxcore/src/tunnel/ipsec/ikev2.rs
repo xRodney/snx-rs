@@ -502,7 +502,11 @@ impl Ikev2TunnelConnector {
     fn store(&self) -> SessionStore {
         // its own table: the blob is IKEv2's format, and a profile that switches
         // version must not be handed the other's bytes
-        SessionStore::new("ikev2_session", self.params.profile_id, self.params.server_name.clone())
+        SessionStore::new(
+            super::IKEV2_SESSION_TABLE,
+            self.params.profile_id,
+            self.params.server_name.clone(),
+        )
     }
 
     fn persist_session(&mut self) {

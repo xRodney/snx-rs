@@ -89,6 +89,13 @@ widestring = "1"
 winreg = "0.56"
 hostname = "0.4"
 
+# Android: no Secret Service / systemd-resolved / rtnetlink / XFRM. Only the deps the userspace ESP
+# path needs are pulled in; routing/DNS/device are handed to VpnService.Builder over JNI (the JNI
+# entry points live in the apps/snxrs-android cdylib). OpenSSL is vendored so it builds under the NDK.
+[target.'cfg(target_os = "android")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

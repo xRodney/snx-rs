@@ -158,6 +158,9 @@ error-certificate-verify-failed = La validation du certificat TLS a échoué. Le
 error-invalid-gateway-info = Réponse d'informations de passerelle invalide
 error-invalid-notification-level = Niveau de notification invalide
 error-unsupported-login-type = Type de connexion non pris en charge
+error-connection-in-progress = Une connexion est déjà en cours ; déconnectez-vous d'abord
+error-interactive-mfa-unsupported = Les invites MFA interactives ne sont pas encore prises en charge : {$prompt}
+error-unsupported-auth-factor = Facteur d'authentification non pris en charge : {$factor}
 
 # Placeholder texts
 placeholder-domains = Domaines séparés par des virgules

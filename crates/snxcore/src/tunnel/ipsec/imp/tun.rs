@@ -264,10 +264,6 @@ impl TunIPsecTunnel {
             .configure_device(&device_config)
             .await?;
 
-        let dev = tun.inner();
-        let tun_sender = dev.clone();
-        let tun_receiver = dev.clone();
-
         self.tun_device = Some(tun);
 
         let resolver_config = ResolverConfig::builder(self.params.clone(), Platform::get().get_features().await)
@@ -281,6 +277,11 @@ impl TunIPsecTunnel {
         if !self.params.no_dns {
             self.setup_dns(&resolver_config, &tun_name, false).await?;
         }
+
+        // On Android this establishes the VpnService fd, which needs the routes and DNS declared first.
+        let dev = self.tun_device.as_ref().context("No device")?.inner();
+        let tun_sender = dev.clone();
+        let tun_receiver = dev.clone();
 
         let mut snx_receiver = self.receiver.take().context("No receiver")?;
 
