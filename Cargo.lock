@@ -3450,29 +3450,33 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 [[package]]
 name = "isakmp"
 version = "0.2.0"
-source = "git+https://github.com/ancwrd1/isakmp.git#ce07353f7a1e3f62ef3a200bca34e3de0f72d0dc"
 dependencies = [
  "anyhow",
  "async-trait",
  "bitflags 2.13.2",
  "byteorder",
  "bytes",
+ "clap",
  "cryptoki",
  "futures",
  "hex",
  "ipnet",
  "itertools 0.15.0",
+ "opener",
  "openssl",
  "pnet_macros",
  "pnet_macros_support",
  "pnet_packet",
  "rand",
+ "regex",
  "rmp-serde",
  "secrecy",
  "serde",
+ "socket2",
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "windows-sys 0.61.2",
 ]
 
@@ -3871,6 +3875,15 @@ checksum = "5c463f9c428b7fc5ec885dcd39ce4aa61e29111d0e33483f6f98c74e89d8621e"
 dependencies = [
  "lyon_geom",
  "num-traits",
+]
+
+[[package]]
+name = "matchers"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
+dependencies = [
+ "regex-automata",
 ]
 
 [[package]]
@@ -6935,6 +6948,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -7170,10 +7184,14 @@ version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
+ "matchers",
  "nu-ansi-term",
+ "once_cell",
+ "regex-automata",
  "sharded-slab",
  "smallvec",
  "thread_local",
+ "tracing",
  "tracing-core",
  "tracing-log",
 ]
