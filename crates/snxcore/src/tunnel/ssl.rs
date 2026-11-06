@@ -469,7 +469,9 @@ impl VpnTunnel for SslTunnel {
 
                 result = tun_receiver.recv(&mut buf) => {
                     if let Ok(size) = result {
-                        self.send(buf[0..size].to_vec()).await?;
+                        if let Err(e) = self.send(buf[0..size].to_vec()).await {
+                            break Err(e);
+                        }
                     } else {
                         break Err(anyhow!(tr!("error-receive-failed")));
                     }

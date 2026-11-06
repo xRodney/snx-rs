@@ -490,7 +490,9 @@ impl TunIPsecTunnel {
                         .await;
                         match result {
                             Ok(Ok(packet)) => {
-                                self.send(packet).await?;
+                                if let Err(e) = self.send(packet).await {
+                                    break Err(e);
+                                }
                             },
                             Ok(Err(e)) => {
                                 error!("Failed to encode packet: {}", e);
